@@ -4,3 +4,11 @@ project = "cpky"
 [checks.native]
 kind = "commands"
 commands = [["bash", "ci/native-check.sh"]]
+
+[checks.acceptance-preflight]
+kind = "commands"
+commands = [["python3", "ci/acceptance.py", "preflight"]]
+
+[checks.acceptance]
+kind = "commands"
+commands = [["python3", "ci/acceptance.py", "acceptance"]]

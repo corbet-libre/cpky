@@ -106,6 +106,8 @@ results. Invalid requests leave the original operation pending until its timeout
 The listener drains an accepted response before its consuming wait closes it.
 
 The trusted cmsg/Vault runtime consumes `UnlockSecret::import` in Rust. Product
-JSON/MCP/TypeScript actions may expose a launch URL and redacted status, never the
-PRF or private callback wire. Server signature verification remains Keyhole's job;
+JSON/MCP/TypeScript actions expose only redacted status. The launch URL contains a
+bearer capability in its fragment and remains inside the trusted Rust runtime,
+which invokes `BrowserCeremony::open_browser`; neither it nor the PRF or private
+callback wire enters product JSON. Server signature verification remains Keyhole's job;
 callback success is not membership, G3 authority or a completed server login.

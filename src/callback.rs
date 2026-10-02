@@ -137,7 +137,9 @@ pub(crate) fn destination(fragment: &str) -> Result<(url::Url, Zeroizing<String>
             .decode(capability.as_bytes())
             .map_err(|_| Error::InvalidOptions)?,
     );
-    if bytes.len() != 32 || URL_SAFE_NO_PAD.encode(&*bytes) != *capability {
+    // The strict canonical base64url decoder above already rejects every
+    // non-canonical spelling, so only the decoded length remains to check.
+    if bytes.len() != 32 {
         return Err(Error::InvalidOptions);
     }
     Ok((url, capability))

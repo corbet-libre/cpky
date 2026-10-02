@@ -13,6 +13,10 @@ autotests = false
 name = "server"
 path = "tests/server.rs"
 
+[[example]]
+name = "loopback_page"
+crate-type = ["cdylib"]
+
 [lib]
 crate-type = ["rlib"]
 
