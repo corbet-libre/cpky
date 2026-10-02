@@ -1,0 +1,217 @@
+name: ci
+'on':
+  push:
+    branches:
+    - main
+  pull_request: {}
+  workflow_dispatch: {}
+  schedule:
+  - cron: 19 4 * * 1
+permissions:
+  contents: read
+concurrency:
+  group: ci
+  cancel-in-progress: false
+  queue: max
+env:
+  CARGO_BUILD_JOBS: '2'
+  CARGO_TERM_COLOR: always
+  CARGO_NET_GIT_FETCH_WITH_CLI: 'true'
+jobs:
+  resolve:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+    - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      with:
+        ref: ${{ github.event.pull_request.head.sha || github.sha }}
+        persist-credentials: false
+    - uses: dtolnay/rust-toolchain@02cb101ec7c40f2c49e1d9714d64511d8e1b74de
+      with:
+        toolchain: stable
+    - run: 'cargo update
+
+        rustc --version --verbose > resolver.txt
+
+        sha256sum Cargo.lock > resolved-lock.sha256'
+    - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+      with:
+        name: resolved-lock
+        path: 'Cargo.lock
+
+          resolver.txt
+
+          resolved-lock.sha256'
+        retention-days: 7
+  dependency-policy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    needs:
+    - resolve
+    steps:
+    - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      with:
+        ref: ${{ github.event.pull_request.head.sha || github.sha }}
+        persist-credentials: false
+    - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+      with:
+        name: resolved-lock
+    - run: 'python3 .github/scripts/check-first-party.py
+
+        python3 .github/scripts/test-source-coverage.py'
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    needs:
+    - resolve
+    steps:
+    - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      with:
+        ref: ${{ github.event.pull_request.head.sha || github.sha }}
+        persist-credentials: false
+    - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+      with:
+        name: resolved-lock
+    - uses: dtolnay/rust-toolchain@02cb101ec7c40f2c49e1d9714d64511d8e1b74de
+      with:
+        toolchain: stable
+        components: rustfmt, clippy
+        targets: wasm32-unknown-unknown
+    - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6
+      with:
+        key: stable
+        cache-on-failure: true
+    - run: cargo fmt --all -- --check
+      id: fmt
+      continue-on-error: true
+    - run: cargo clippy --locked --all-targets --all-features -- -D warnings
+    - run: cargo test --locked --all-features
+    - name: Select matching upstream test runner
+      id: binding
+      run: 'python3 - <<''PYCODE''
+
+        import os, tomllib
+
+        v=next(p[''version''] for p in tomllib.load(open(''Cargo.lock'',''rb''))[''package''] if p[''name'']==''wasm-bindgen'')
+
+        with open(os.environ[''GITHUB_OUTPUT''],''a'') as f: f.write(''version=''+v+''\n'')
+
+        PYCODE'
+    - uses: taiki-e/install-action@83ac0ad63c0167e6f06796fab0fce28db1bf3db0
+      with:
+        tool: wasm-bindgen-cli@${{ steps.binding.outputs.version }}
+    - run: python3 -m pip install -r .github/requirements.txt
+    - run: cargo clippy --locked --target wasm32-unknown-unknown --all-features --lib -- -D warnings
+    - name: Execute actual browser vectors
+      run: cargo test --locked --target wasm32-unknown-unknown --all-features --lib
+      env:
+        CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUNNER: python3 .github/scripts/browser-runner.py
+        WASM_BINDGEN_USE_BROWSER: '1'
+        WASM_BINDGEN_TEST_TIMEOUT: '120'
+    - name: Export formatting
+      if: always() && steps.fmt.outcome == 'failure'
+      run: 'cargo fmt --all
+
+        git diff > formatting.patch'
+    - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+      if: always()
+      with:
+        name: formatting
+        path: formatting.patch
+        retention-days: 7
+    - if: always() && steps.fmt.outcome == 'failure'
+      run: exit 1
+  coverage:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    needs:
+    - resolve
+    - check
+    steps:
+    - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      with:
+        ref: ${{ github.event.pull_request.head.sha || github.sha }}
+        persist-credentials: false
+    - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+      with:
+        name: resolved-lock
+    - uses: dtolnay/rust-toolchain@02cb101ec7c40f2c49e1d9714d64511d8e1b74de
+      with:
+        toolchain: nightly
+        components: llvm-tools-preview
+    - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6
+      with:
+        key: native-coverage
+        cache-on-failure: true
+    - uses: taiki-e/install-action@83ac0ad63c0167e6f06796fab0fce28db1bf3db0
+      with:
+        tool: cargo-llvm-cov
+    - run: cargo llvm-cov --locked --branch --all-features --json --output-path coverage.json --ignore-filename-regex '/tests/'
+    - run: cargo llvm-cov report --lcov --output-path coverage.lcov --ignore-filename-regex '/tests/'
+    - run: python3 .github/scripts/check-source-coverage.py coverage.lcov coverage.json
+    - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+      if: always()
+      with:
+        name: coverage
+        path: 'coverage.json
+
+          coverage.lcov'
+        retention-days: 7
+  wasm-coverage:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    needs:
+    - resolve
+    - check
+    env:
+      CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUNNER: python3 .github/scripts/browser-runner.py
+      CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUSTFLAGS: -Zno-profiler-runtime -Clink-args=--no-gc-sections --cfg=owned_browser_coverage
+      WASM_BINDGEN_TEST_ONLY_WEB: '1'
+      WASM_BINDGEN_SPLIT_LINKED_MODULES: '1'
+      CPKY_COVERAGE: '1'
+      CC_wasm32_unknown_unknown: clang
+    steps:
+    - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      with:
+        ref: ${{ github.event.pull_request.head.sha || github.sha }}
+        persist-credentials: false
+    - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+      with:
+        name: resolved-lock
+    - uses: dtolnay/rust-toolchain@02cb101ec7c40f2c49e1d9714d64511d8e1b74de
+      with:
+        toolchain: nightly
+        components: llvm-tools-preview
+        targets: wasm32-unknown-unknown
+    - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6
+      with:
+        key: wasm-coverage
+        cache-on-failure: true
+    - name: Select matching upstream test runner
+      id: binding
+      run: 'python3 - <<''PYCODE''
+
+        import os, tomllib
+
+        v=next(p[''version''] for p in tomllib.load(open(''Cargo.lock'',''rb''))[''package''] if p[''name'']==''wasm-bindgen'')
+
+        with open(os.environ[''GITHUB_OUTPUT''],''a'') as f: f.write(''version=''+v+''\n'')
+
+        PYCODE'
+    - uses: taiki-e/install-action@83ac0ad63c0167e6f06796fab0fce28db1bf3db0
+      with:
+        tool: cargo-llvm-cov,wasm-bindgen-cli@${{ steps.binding.outputs.version }}
+    - run: python3 -m pip install -r .github/requirements.txt
+    - run: cargo llvm-cov test --locked --branch --all-features --lib --coverage-target-only --target wasm32-unknown-unknown
+        --lcov --output-path wasm-coverage.lcov --ignore-filename-regex '/tests/'
+    - run: cargo llvm-cov report --target wasm32-unknown-unknown --coverage-target-only --json --output-path wasm-coverage.json
+        --ignore-filename-regex '/tests/'
+    - run: python3 .github/scripts/check-source-coverage.py wasm-coverage.lcov wasm-coverage.json
+    - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+      if: always()
+      with:
+        name: wasm-coverage
+        path: 'wasm-coverage.json
+
+          wasm-coverage.lcov'
+        retention-days: 7
