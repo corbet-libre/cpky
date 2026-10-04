@@ -130,6 +130,67 @@ impl BrowserCeremony {
         webbrowser::open(self.launch.as_str()).map_err(unavailable)
     }
 
+    /// Remaining lifetime for public progress displays. The listener continues
+    /// to enforce its own monotonic deadline independently of the display clock.
+    pub fn remaining_lifetime(&self) -> Duration {
+        self.pending
+            .deadline
+            .saturating_duration_since(tokio::time::Instant::now())
+    }
+
+    /// Exercise the original callback over actual HTTP with the explicitly
+    /// test-only software authenticator. Never selected by production callers.
+    #[cfg(feature = "test-authenticator")]
+    pub async fn complete_with_test_authenticator(
+        &self,
+        platform: crate::software::SoftwareAuthenticator,
+    ) -> Result<(), Error> {
+        let (finish, capability) =
+            callback::destination(self.launch.fragment().ok_or(Error::InvalidOptions)?)?;
+        let client = reqwest::Client::builder()
+            .timeout(BODY_LIMIT)
+            .redirect(reqwest::redirect::Policy::none())
+            .build()
+            .map_err(unavailable)?;
+        let mut request_url = finish.clone();
+        request_url.set_path("/request");
+        let response = client
+            .get(request_url)
+            .header("origin", self.pending.context.origin())
+            .header("x-cpky-capability", capability.as_str())
+            .send()
+            .await
+            .map_err(unavailable)?;
+        if response.status() != reqwest::StatusCode::OK {
+            return Err(Error::InvalidResponse);
+        }
+        let bytes = response.bytes().await.map_err(unavailable)?;
+        if bytes.len() > callback::MAX_CALLBACK {
+            return Err(Error::InvalidResponse);
+        }
+        let request = serde_json::from_slice(&bytes).map_err(|_| Error::InvalidOptions)?;
+        let result = callback::execute(
+            Context::new(self.pending.context.origin(), self.pending.context.rp_id())?,
+            request,
+            platform,
+        )
+        .await?;
+        let frame = callback::encode(result)?;
+        let response = client
+            .post(finish)
+            .header("origin", self.pending.context.origin())
+            .header("x-cpky-capability", capability.as_str())
+            .header("content-type", "application/octet-stream")
+            .body(frame.to_vec())
+            .send()
+            .await
+            .map_err(unavailable)?;
+        if response.status() != reqwest::StatusCode::NO_CONTENT {
+            return Err(Error::InvalidResponse);
+        }
+        Ok(())
+    }
+
     /// Consume the one result. Timeout, cancellation, and a closed listener refuse.
     pub async fn wait(mut self) -> Result<CeremonyResult, Error> {
         let receiver = self.result.take().expect("wait consumes the ceremony once");

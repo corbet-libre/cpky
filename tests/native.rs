@@ -47,6 +47,25 @@ fn runtime() -> tokio::runtime::Runtime {
 }
 
 #[test]
+fn browser_ceremony_reports_its_original_monotonic_lifetime() {
+    runtime().block_on(async {
+        let ceremony = BrowserCeremony::start(
+            Context::new(ORIGIN, RP).unwrap(),
+            url::Url::parse(&format!("{ORIGIN}/cli-login.html")).unwrap(),
+            CeremonyRequest {
+                kind: CeremonyKind::Authentication,
+                options: crate::tests::request(),
+            },
+        )
+        .await
+        .unwrap();
+        assert!(ceremony.remaining_lifetime() <= LIFETIME);
+        assert!(!ceremony.remaining_lifetime().is_zero());
+        ceremony.cancel();
+    });
+}
+
+#[test]
 fn every_platform_failure_is_the_same_coarse_refusal() {
     assert_eq!(unavailable("detail"), Error::Unavailable);
     assert_eq!(
@@ -345,5 +364,62 @@ fn a_valid_delivery_is_accepted_once_and_never_after_the_receiver_is_gone() {
         )
         .await;
         assert_eq!(response.status(), StatusCode::GONE);
+    });
+}
+
+#[cfg(feature = "test-authenticator")]
+#[test]
+fn original_http_callback_accepts_real_signature_once_and_keeps_prf_opaque() {
+    use crate::software::{SoftwareAuthenticator, TestConfiguration};
+    runtime().block_on(async {
+        let context = Context::new(ORIGIN, RP).unwrap();
+        let platform = SoftwareAuthenticator::new(
+            ORIGIN,
+            TestConfiguration {
+                user_verified: true,
+                prf: true,
+                evaluate_at_create: false,
+            },
+        )
+        .unwrap();
+        let mut client = crate::Client::new(Context::new(ORIGIN, RP).unwrap(), platform);
+        client
+            .register_member(crate::tests::creation())
+            .await
+            .unwrap();
+        let platform = client.into_authenticator();
+        let retry = platform.synced_test_device();
+        let ceremony = BrowserCeremony::start(
+            context,
+            Url::parse(&format!("{ORIGIN}/cli-login.html")).unwrap(),
+            CeremonyRequest {
+                kind: CeremonyKind::Authentication,
+                options: crate::tests::request(),
+            },
+        )
+        .await
+        .unwrap();
+        ceremony
+            .complete_with_test_authenticator(platform)
+            .await
+            .unwrap();
+        assert!(
+            ceremony
+                .complete_with_test_authenticator(retry)
+                .await
+                .is_err()
+        );
+        let CeremonyResult::Authentication(authentication) = ceremony.wait().await.unwrap() else {
+            panic!("wrong original ceremony result");
+        };
+        let (credential, custody) = authentication.into_parts();
+        assert!(credential.as_json()["response"]["signature"].is_string());
+        assert!(
+            credential
+                .as_json()
+                .pointer("/clientExtensionResults/prf")
+                .is_none()
+        );
+        assert!(matches!(custody, crate::VaultOutcome::Ready(_)));
     });
 }

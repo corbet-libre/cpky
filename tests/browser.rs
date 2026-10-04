@@ -2,6 +2,62 @@ use super::*;
 use crate::{Client, Context, VaultOutcome};
 
 #[wasm_bindgen_test::wasm_bindgen_test]
+fn consumed_loopback_launch_stays_opaque_and_requires_observable_consumption() {
+    let window = web_sys::window().unwrap();
+    let origin = window.location().origin().unwrap();
+    let original = window.location().href().unwrap();
+    let mut page = url::Url::parse(&original).unwrap();
+    page.set_fragment(None);
+    window
+        .history()
+        .unwrap()
+        .replace_state_with_url(&JsValue::NULL, "", Some(page.as_str()))
+        .unwrap();
+    let context = || Context::new(&origin, "localhost").unwrap();
+    let fragment = format!(
+        "#cpky-v1=http%3A%2F%2F127.0.0.1%3A4242%2Ffinish&cap={}",
+        URL_SAFE_NO_PAD.encode([21; 32])
+    );
+    // Preparation opens no socket and performs no WebAuthn operation.
+    drop(LoopbackCeremony::from_consumed_fragment(context(), &fragment).unwrap());
+    page.set_fragment(Some("retained"));
+    window
+        .history()
+        .unwrap()
+        .replace_state_with_url(&JsValue::NULL, "", Some(page.as_str()))
+        .unwrap();
+    assert!(matches!(
+        LoopbackCeremony::from_consumed_fragment(context(), &fragment),
+        Err(Error::WrongContext)
+    ));
+    page.set_fragment(None);
+    window
+        .history()
+        .unwrap()
+        .replace_state_with_url(&JsValue::NULL, "", Some(page.as_str()))
+        .unwrap();
+    for invalid in [
+        "",
+        "#wrong",
+        "#cpky-v1=http%3A%2F%2Fforeign.test%3A4242%2Ffinish&cap=bad",
+    ] {
+        assert!(LoopbackCeremony::from_consumed_fragment(context(), invalid).is_err());
+    }
+    assert!(matches!(
+        LoopbackCeremony::from_consumed_fragment(
+            Context::new("https://elsewhere.example", "elsewhere.example").unwrap(),
+            &fragment
+        ),
+        Err(Error::WrongContext)
+    ));
+    window
+        .history()
+        .unwrap()
+        .replace_state_with_url(&JsValue::NULL, "", Some(&original))
+        .unwrap();
+}
+
+#[wasm_bindgen_test::wasm_bindgen_test]
 fn options_preserve_exact_binary_and_policy_fields() {
     let original = crate::tests::creation();
     let context = Context::new(crate::tests::ORIGIN, crate::tests::RP).unwrap();
