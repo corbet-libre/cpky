@@ -155,7 +155,8 @@ steps:
                  'baseline-dependency-metadata.json', 'resolved-dependency-metadata.json',
                  'coverage.json', 'coverage.lcov', 'coverage.txt', 'tool-versions.txt',
                  'wasm-coverage.json', 'wasm-coverage.lcov', 'wasm-coverage.txt',
-                 'runner-artifact.json', 'runner-version.txt', 'https-loopback.json'] + [p['log'] for p in phases]
+                 'runner-artifact.json', 'runner-version.txt', 'https-loopback.json',
+                 'https-loopback-coverage.json'] + [p['log'] for p in phases]
         artifacts = {name: sha(root / name) for name in files}
         runner = json.loads((root / 'runner-artifact.json').read_text())
         require(runner['lock_sha256'] == receipt['candidate_lock_sha256'], 'runner is bound to a different lock')
@@ -176,6 +177,45 @@ steps:
         
         https_loopback = json.loads((root / 'https-loopback.json').read_text())
         require(https_loopback.get('status') == 'passed' and all(https_loopback.get(k) is True for k in ['secure_context', 'fragment_removed', 'registration_verified', 'authentication_verified', 'same_prf']), 'actual HTTPS loopback round trip missing')
+        measured_loopback = json.loads((root / 'https-loopback-coverage.json').read_text())
+        require(measured_loopback.get('status') == 'passed' and all(measured_loopback.get(k) is True for k in ['secure_context', 'fragment_removed', 'registration_verified', 'authentication_verified', 'same_prf']), 'instrumented HTTPS loopback round trip missing')
+        refusal_cases = ['refused-status', 'redirect', 'missing-length', 'invalid-length',
+                         'over-limit', 'short-body', 'encoded-length-mismatch',
+                         'invalid-json', 'invalid-ceremony']
+        for loopback in [https_loopback, measured_loopback]:
+            navigation = loopback.get('navigation_refusal')
+            require(isinstance(navigation, dict), 'canceled navigation receipt missing')
+            require(all(navigation.get(k) is True for k in ['unavailable', 'retained_fragment', 'cancelled', 'trusted', 'cleanup_complete']), 'actual navigation cancellation refusal missing')
+            require(type(navigation.get('events')) is int and navigation['events'] == 1, 'expected exactly one canceled navigation')
+            require(all(type(navigation.get(k)) is int and navigation[k] == 0 for k in ['options', 'request_gets', 'finish_posts']), 'canceled fragment removal performed callback I/O')
+            platform = loopback.get('insecure_platform')
+            require(isinstance(platform, dict), 'insecure platform receipt missing')
+            require(platform.get('secure_context') is False, 'platform probe was not insecure')
+            require(all(platform.get(k) is True for k in ['credentials_absent', 'create_unavailable', 'get_unavailable']), 'actual absent platform refusal missing')
+            require(type(platform.get('completed_calls')) is int and platform['completed_calls'] == 2, 'insecure platform call count differs')
+            refusals = loopback.get('refusal_transcripts')
+            require(isinstance(refusals, list) and len(refusals) == len(refusal_cases), 'incomplete callback refusal transcripts')
+            require(all(isinstance(item, dict) for item in refusals), 'malformed callback refusal transcript')
+            require([item.get('case') for item in refusals] == refusal_cases, 'callback refusal cases differ')
+            for item in refusals:
+                require(item.get('refused') is True, 'callback transcript did not refuse')
+                require(type(item.get('request_gets')) is int and item['request_gets'] == 1, 'callback transcript did not reach its peer exactly once')
+                require(type(item.get('finish_posts')) is int and item['finish_posts'] == 0, 'callback transcript posted a finish')
+        profiles = measured_loopback.get('profiles')
+        require(isinstance(profiles, list) and len(profiles) == 3, 'two ceremony and one insecure platform profiles required')
+        require([p.get('phase') for p in profiles] == [1, 2, 3], 'browser profile phases differ')
+        require(all(p.get('module_signature') == profiles[0].get('module_signature') for p in profiles), 'browser profile modules differ')
+        for profile in profiles:
+            signature = profile.get('module_signature')
+            require(isinstance(signature, str) and re.fullmatch(r'[0-9]{1,20}', signature), 'invalid browser module signature')
+            require(int(signature) <= 2**64 - 1, 'invalid browser module signature range')
+            relative = profile.get('path')
+            require(isinstance(relative, str) and re.fullmatch(r'https-loopback-profiles/cpky-loopback-[0-9]+-' + str(profile['phase']) + '-' + signature + r'\.profraw', relative), 'unexpected browser profile path')
+            path = root / relative
+            require(path.resolve().parent == root / 'https-loopback-profiles', 'browser profile outside retained artifacts')
+            require(sha(path) == profile.get('sha256'), 'browser profile changed')
+            require(0 < path.stat().st_size == profile.get('bytes') <= 16 * 1024 * 1024, 'browser profile size differs')
+            artifacts[relative] = profile['sha256']
         closure = json.loads((root / 'closure-manifest.json').read_text())
         require(closure.get('freshness') == 'main-observed', 'historical closure cannot claim fresh acceptance')
         require(all(r.get('main_observed_at') for r in closure['repositories']), 'missing source-main observations')

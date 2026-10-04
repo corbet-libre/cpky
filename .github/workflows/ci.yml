@@ -59,6 +59,7 @@ jobs:
     - run: 'python3 .github/scripts/check-first-party.py
 
         python3 .github/scripts/test-source-coverage.py'
+    - run: python3 ci/test_loopback_coverage.py
   check:
     runs-on: ubuntu-latest
     timeout-minutes: 30
@@ -169,6 +170,7 @@ jobs:
       WASM_BINDGEN_TEST_ONLY_WEB: '1'
       WASM_BINDGEN_SPLIT_LINKED_MODULES: '1'
       CPKY_COVERAGE: '1'
+      CARGO_LLVM_COV_TARGET_DIR: target/llvm-cov-target
       CC_wasm32_unknown_unknown: clang
     steps:
     - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
@@ -204,6 +206,11 @@ jobs:
     - run: python3 -m pip install -r .github/requirements.txt
     - run: cargo llvm-cov test --locked --branch --all-features --lib --coverage-target-only --target wasm32-unknown-unknown
         --lcov --output-path wasm-coverage.lcov --ignore-filename-regex '/tests/'
+    - name: Include actual HTTPS loopback counters
+      run: |
+        mkdir -p "$RUNNER_TEMP/cpky-loopback-coverage"
+        CI_ACCEPTANCE_ARTIFACTS="$RUNNER_TEMP/cpky-loopback-coverage" python3 ci/https-loopback.py --coverage
+        cargo llvm-cov report --target wasm32-unknown-unknown --coverage-target-only --lcov --output-path wasm-coverage.lcov --ignore-filename-regex '/tests/'
     - run: cargo llvm-cov report --target wasm32-unknown-unknown --coverage-target-only --json --output-path wasm-coverage.json
         --ignore-filename-regex '/tests/'
     - run: python3 .github/scripts/check-source-coverage.py wasm-coverage.lcov wasm-coverage.json
@@ -213,5 +220,7 @@ jobs:
         name: wasm-coverage
         path: 'wasm-coverage.json
 
-          wasm-coverage.lcov'
+          wasm-coverage.lcov
+
+          ${{ runner.temp }}/cpky-loopback-coverage/'
         retention-days: 7

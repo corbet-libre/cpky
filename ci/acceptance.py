@@ -158,6 +158,7 @@ def preflight(artifacts):
                 stdout=stream, stderr=subprocess.STDOUT)
     metadata(artifacts, 'baseline')
     run([sys.executable, '.github/scripts/test-source-coverage.py'])
+    run([sys.executable, 'ci/test_loopback_coverage.py'])
     if digest('Cargo.lock') != before:
         raise RuntimeError('preflight changed the lock')
 
@@ -214,12 +215,17 @@ def coverage(artifacts, stream):
     checked_coverage(artifacts / 'coverage.lcov', artifacts / 'coverage.json', stream)
     env = dict(os.environ, CPKY_COVERAGE='1', WASM_BINDGEN_TEST_ONLY_WEB='1',
                WASM_BINDGEN_SPLIT_LINKED_MODULES='1',
+               CARGO_LLVM_COV_TARGET_DIR=str(Path(os.environ['CARGO_TARGET_DIR']) / 'llvm-cov-target'),
                CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUNNER='python3 .github/scripts/browser-runner.py',
                CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUSTFLAGS='-Zno-profiler-runtime -Clink-args=--no-gc-sections --cfg=owned_browser_coverage')
     nightly(['cargo', 'llvm-cov', 'test', *common, '--lib', '--coverage-target-only',
              '--target', 'wasm32-unknown-unknown', '--lcov', '--output-path', str(artifacts / 'wasm-coverage.lcov')],
             env=env, stdout=stream, stderr=subprocess.STDOUT)
-    for kind in ['json', 'text']:
+    nightly([sys.executable, 'ci/https-loopback.py', '--coverage'],
+            env=env, stdout=stream, stderr=subprocess.STDOUT)
+    # Re-export every format after the external fixture contributes its counters.
+    # The strict checker must compare LCOV and JSON from the same merged input.
+    for kind in ['lcov', 'json', 'text']:
         suffix = 'txt' if kind == 'text' else kind
         nightly(['cargo', 'llvm-cov', 'report', '--target', 'wasm32-unknown-unknown',
                  '--coverage-target-only', '--' + kind, '--output-path',

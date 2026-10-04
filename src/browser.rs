@@ -28,9 +28,6 @@ impl Authenticator for Browser {
         let credential = JsFuture::from(promise)
             .await
             .map_err(|_| Error::Cancelled)?;
-        if credential.is_null() || credential.is_undefined() {
-            return Err(Error::Cancelled);
-        }
         split(&credential, create)
     }
 }
@@ -156,6 +153,10 @@ fn take_prf(prf: &JsValue) -> (bool, Result<Option<UnlockSecret>, Error>) {
 }
 
 fn split(credential: &JsValue, create: bool) -> Result<PlatformResult, Error> {
+    // All platform-result shape checks belong to this conversion boundary.
+    if credential.is_null() || credential.is_undefined() {
+        return Err(Error::Cancelled);
+    }
     let method = get(credential, "getClientExtensionResults")?
         .dyn_into::<Function>()
         .map_err(|_| Error::InvalidResponse)?;
@@ -252,6 +253,16 @@ pub async fn complete_loopback(context: crate::Context) -> Result<(), Error> {
         .map_err(|_| Error::Unavailable)?
         .replace_state_with_url(&JsValue::NULL, "", Some(page.as_str()))
         .map_err(|_| Error::Unavailable)?;
+    // Navigation API cancellation can leave the old URL intact even when
+    // replaceState returns normally. Consume the capability before any I/O.
+    if !window
+        .location()
+        .hash()
+        .map_err(|_| Error::Unavailable)?
+        .is_empty()
+    {
+        return Err(Error::Unavailable);
+    }
     let mut request_url = finish.clone();
     request_url.set_path("/request");
     let (response, _request_cancel) =

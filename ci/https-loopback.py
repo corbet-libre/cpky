@@ -17,13 +17,16 @@ import time
 from selenium import webdriver
 from selenium.webdriver.chrome.service import Service
 
+from loopback_coverage import instrumented_environment, save_profiles
+from loopback_refusals import run_refusals
 
-def build(example, target=None):
+
+def build(example, target=None, env=None):
     command = ['cargo', 'build', '--locked', '--all-features', '--example', example,
                '--message-format=json-render-diagnostics']
     if target:
         command += ['--target', target]
-    completed = subprocess.run(command, stdout=subprocess.PIPE, text=True, check=True)
+    completed = subprocess.run(command, env=env, stdout=subprocess.PIPE, text=True, check=True)
     artifacts = []
     for line in completed.stdout.splitlines():
         value = json.loads(line)
@@ -40,6 +43,10 @@ def build(example, target=None):
 
 
 class QuietFiles(http.server.SimpleHTTPRequestHandler):
+    def setup(self):
+        self.request.settimeout(5)
+        super().setup()
+
     def log_message(self, *_args):
         pass
 
@@ -49,10 +56,71 @@ class QuietFiles(http.server.SimpleHTTPRequestHandler):
         super().end_headers()
 
 
+def capture_profile(driver):
+    return driver.execute_async_script('''
+        const done = arguments[0];
+        (async () => {
+            const api = await import('./loopback_page.js');
+            const bytes = api.__owned_test_cov_dump();
+            if (!bytes.byteLength || bytes.byteLength > 16 * 1024 * 1024)
+                throw new Error('invalid profile size');
+            let binary = '';
+            for (let i = 0; i < bytes.length; i += 8192)
+                binary += String.fromCharCode(...bytes.subarray(i, i + 8192));
+            done({profile: btoa(binary),
+                  signature: api.__owned_test_module_signature().toString()});
+        })().catch(() => done({failed: true}));
+    ''')
+
+
+def insecure_platform(driver, page):
+    driver.get(page)
+    result = driver.execute_async_script('''
+        const done = arguments[0];
+        (async () => {
+            if (window.isSecureContext !== false || navigator.credentials !== undefined
+                    || location.protocol !== 'http:' || location.hostname !== 'cpky-insecure.test')
+                throw new Error('actual insecure realm required');
+            const api = await import('./loopback_page.js');
+            await api.default();
+            await api.unavailable_platform(true);
+            await api.unavailable_platform(false);
+            done({secure_context: false, credentials_absent: true,
+                  create_unavailable: true, get_unavailable: true, completed_calls: 2});
+        })().catch(() => done({failed: true}));
+    ''')
+    expected = dict(secure_context=False, credentials_absent=True,
+                    create_unavailable=True, get_unavailable=True, completed_calls=2)
+    if result != expected:
+        raise RuntimeError('actual insecure platform did not refuse both ceremonies')
+    return result
+
+
 def main():
+    if sys.argv[1:] not in ([], ['--coverage']):
+        raise RuntimeError('unknown HTTPS fixture mode')
+    coverage = sys.argv[1:] == ['--coverage']
     artifacts = Path(os.environ['CI_ACCEPTANCE_ARTIFACTS']).resolve(strict=True)
     native = build('loopback_native')
-    wasm = build('loopback_page', 'wasm32-unknown-unknown')
+    wasm_env = None
+    if coverage:
+        # Use the same current compiler, target and branch instrumentation as
+        # the library browser tests. Never reconstruct LLVM flags by hand.
+        # show-env normally chooses Cargo's target root, while llvm-cov test
+        # chooses its llvm-cov-target child. Both callers select one explicit
+        # coverage directory so library and external-fixture counters merge.
+        coverage_env = dict(os.environ, CARGO_TARGET_DIR=os.environ['CARGO_LLVM_COV_TARGET_DIR'])
+        exported = subprocess.run(['cargo', 'llvm-cov', 'show-env', '--branch',
+                                   '--target', 'wasm32-unknown-unknown', '--coverage-target-only'],
+                                  env=coverage_env, stdout=subprocess.PIPE, text=True, check=True)
+        wasm_env = instrumented_environment(exported.stdout, coverage_env)
+        expected_target = Path(coverage_env['CARGO_TARGET_DIR']).resolve()
+        if (Path(wasm_env['LLVM_PROFILE_FILE']).parent.resolve() != expected_target
+                or Path(wasm_env['CARGO_LLVM_COV_TARGET_DIR']).resolve() != expected_target):
+            raise RuntimeError('external fixture coverage target differs from library tests')
+        print(json.dumps({'coverage_export_names': sorted(
+            line.split('=', 1)[0] for line in exported.stdout.splitlines())}), flush=True)
+    wasm = build('loopback_page', 'wasm32-unknown-unknown', env=wasm_env)
     browser = os.environ.get('CHROME_BIN') or shutil.which('chromium')
     driver_path = os.environ.get('CHROMEDRIVER') or shutil.which('chromedriver')
     if not browser or not driver_path:
@@ -75,14 +143,26 @@ def main():
         thread = threading.Thread(target=server.serve_forever, daemon=True)
         thread.start()
         page = f'https://localhost:{server.server_address[1]}/index.html'
+        insecure = None
+        insecure_thread = None
         process = None
         driver = None
+        profiles = []
         try:
+            insecure = http.server.ThreadingHTTPServer(
+                ('127.0.0.1', 0), functools.partial(QuietFiles, directory=str(site)))
+            insecure_thread = threading.Thread(target=insecure.serve_forever, daemon=True)
+            insecure_thread.start()
+            insecure_page = f'http://cpky-insecure.test:{insecure.server_address[1]}/index.html'
             options = webdriver.ChromeOptions()
             options.binary_location = browser
             options.add_argument('--headless=new')
             options.add_argument('--no-sandbox')
             options.add_argument('--disable-dev-shm-usage')
+            # Job-local reserved test hostname, deliberately outside localhost's
+            # secure-context exception. No external DNS, proxy or server is used.
+            options.add_argument('--host-resolver-rules=MAP cpky-insecure.test 127.0.0.1')
+            options.add_argument('--no-proxy-server')
             options.set_capability('acceptInsecureCerts', True)  # Only this generated local test certificate.
             driver = webdriver.Chrome(service=Service(driver_path), options=options)
             driver.set_page_load_timeout(120)
@@ -125,17 +205,35 @@ def main():
                 ''')
                 if result != {'completed': True, 'fragment_removed': True}:
                     raise RuntimeError('actual HTTPS-to-loopback ceremony refused')
+                if phase == 2:
+                    # Reuse this initialized Wasm instance so its real refusal
+                    # counters join the same second navigation's profile.
+                    refusals, navigation_refusal = run_refusals(driver, page)
+                if coverage:
+                    # Each navigation owns a separate Wasm instance. Capture its
+                    # real counters before the next navigation discards them.
+                    profiles.append(capture_profile(driver))
             stdout, stderr = process.communicate(timeout=30)
             if process.returncode != 0:
                 raise RuntimeError('original Keyhole verification refused')
             expected = dict(registration_verified=True, authentication_verified=True, same_prf=True)
             if json.loads(stdout) != expected:
                 raise RuntimeError('incomplete native ceremony result')
+            platform = insecure_platform(driver, insecure_page)
+            if coverage:
+                # Third navigation, same generated module, its own real counters.
+                profiles.append(capture_profile(driver))
             receipt = dict(status='passed', secure_context=True, fragment_removed=True,
                            backend='original Keyhole/libSQL', browser='actual Chromium WebAuthn test authenticator',
                            native_sha256=hashlib.sha256(native.read_bytes()).hexdigest(),
-                           wasm_sha256=hashlib.sha256(wasm.read_bytes()).hexdigest(), **expected)
-            (artifacts / 'https-loopback.json').write_text(json.dumps(receipt, indent=2) + '\n')
+                           wasm_sha256=hashlib.sha256(wasm.read_bytes()).hexdigest(),
+                           refusal_transcripts=refusals, navigation_refusal=navigation_refusal,
+                           insecure_platform=platform, **expected)
+            name = 'https-loopback.json'
+            if coverage:
+                receipt['profiles'] = save_profiles(profiles, wasm_env['LLVM_PROFILE_FILE'], artifacts)
+                name = 'https-loopback-coverage.json'
+            (artifacts / name).write_text(json.dumps(receipt, indent=2) + '\n')
             print('Actual HTTPS registration/authentication -> numeric loopback -> Keyhole/libSQL PASS', flush=True)
         except Exception as error:
             # WebDriver exceptions may include the current URL fragment. Retain
@@ -154,6 +252,11 @@ def main():
             server.shutdown()
             server.server_close()
             thread.join(timeout=5)
+            if insecure is not None:
+                insecure.shutdown()
+                insecure.server_close()
+            if insecure_thread is not None:
+                insecure_thread.join(timeout=5)
 
 
 if __name__ == '__main__':

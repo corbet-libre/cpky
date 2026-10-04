@@ -9,6 +9,10 @@ use zeroize::Zeroizing;
 
 pub(crate) const MAX_CALLBACK: usize = 262_144;
 
+#[cfg(all(test, any(target_arch = "wasm32", feature = "test-authenticator")))]
+#[path = "../tests/callback.rs"]
+mod tests;
+
 /// The exact requested ceremony; a privileged result cannot become a member registration.
 #[derive(Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum CeremonyKind {

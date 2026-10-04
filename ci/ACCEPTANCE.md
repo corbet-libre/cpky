@@ -26,6 +26,46 @@ actual Chromium Navigator/WebAuthn test authenticator, exact numeric loopback
 callback, and original native Keyhole/libSQL registration/authentication. PRF is
 compared only inside native Rust; no secret getter/JS export is added. Launch
 capabilities live only in private ephemeral test files/memory, certificate and
-all private scratch are removed. The public receipt contains only artifact hashes
-and boolean completion facts. This new fixture has not yet run; any refusal fails
-the full browser phase. Neither a software-only HTTP test nor DOM probe substitutes.
+all private scratch are removed. The public receipt contains artifact identities,
+completion facts and bounded refusal transcript counts. Any unexpected refusal fails the full browser phase. Neither a
+software-only HTTP test nor DOM probe substitutes.
+
+The coverage phase also executes this fixture using the same nightly compiler and
+Wasm instrumentation as the library browser tests. It uses cargo-llvm-cov's
+[`show-env` external-test interface](https://github.com/taiki-e/cargo-llvm-cov#get-coverage-of-external-tests)
+and the existing test-only minicov runtime. The external fixture uses
+the same explicitly selected persistent coverage target as the library tests;
+the external build retains upstream's wrapper variables without shell evaluation.
+Registration and authentication each
+run in a fresh page, so the driver captures actual counters before each page is
+discarded. It requires both profiles, matching Wasm module signatures and successful
+original Keyhole verification, retains each raw profile and its hash, then exports
+LCOV and LLVM JSON from the same merged inputs. Missing, empty, malformed or
+mismatched captures fail; the original source coverage checker and thresholds are
+unchanged. The example alone links the profiling exports; the production library
+does not acquire a profiling dependency or export any secret.
+
+Both Crow acceptance and hosted Wasm coverage call this same external fixture.
+After the successful authentication, the same Wasm instance receives nine
+deliberately invalid transcripts from a job-local numeric HTTP peer: refusal
+status, redirect, missing/invalid/oversized/truncated/encoded length, invalid JSON and
+invalid ceremony options. Each case awaits the original completion, requires
+fragment consumption and refusal, and checks that the peer received its one GET
+and no finish POST. No navigator API is replaced and this peer never emits a
+successful ceremony. These real counters join the second navigation's profile.
+
+Library browser tests also exercise actual foreign-RP WebAuthn refusal and an
+actual privileged ceremony. Shared native/browser parser vectors check callback
+destinations and canonical capabilities. Explicit dictionary and callback-frame
+substitutions only prove conversion/encoding refusal, not signed authenticator
+success or real unavailable-PRF behavior.
+
+The encoded-length vector sends a real gzip body whose wire length is correct;
+the browser's Fetch decoder exposes a different byte length to the original
+callback. Dictionary vectors cover explicit null/undefined absence, and direct
+fetch-helper vectors use the original Request/Headers APIs to reject invalid
+method/header input before I/O. Silent mediation with no matching credential
+must refuse through the original browser; it is not a simulated platform result.
+
+The combined coverage path does not establish 100% coverage: remaining uncovered
+refusal paths still fail the original gate and need real tests before acceptance.
