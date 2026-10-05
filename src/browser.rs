@@ -9,6 +9,8 @@ use wasm_bindgen::{JsCast, JsValue};
 use wasm_bindgen_futures::JsFuture;
 use zeroize::Zeroizing;
 
+pub use crate::popup::{PopupCeremony, PopupHandoff};
+
 /// Actual navigator.credentials adapter. Workers and absent platforms refuse.
 pub struct Browser;
 impl sealed::Sealed for Browser {}

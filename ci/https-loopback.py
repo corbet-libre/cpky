@@ -19,6 +19,7 @@ from selenium.webdriver.chrome.service import Service
 
 from loopback_coverage import instrumented_environment, save_profiles
 from loopback_refusals import run_refusals
+from popup_acceptance import stage_popup, run_popup
 
 
 def build(example, target=None, env=None):
@@ -131,6 +132,7 @@ def main():
         site.mkdir()
         subprocess.run(['wasm-bindgen', str(wasm), '--target', 'web', '--out-dir', str(site)], check=True)
         (site / 'index.html').write_text('<!doctype html><title>Passkeys acceptance</title>')
+        stage_popup(site)
         # Test-only maintained TLS certificate; destroyed with the private scratch.
         subprocess.run(['openssl', 'req', '-x509', '-newkey', 'ec', '-pkeyopt', 'ec_paramgen_curve:P-256',
                         '-nodes', '-keyout', str(root / 'key.pem'), '-out', str(root / 'cert.pem'),
@@ -229,6 +231,7 @@ def main():
                            wasm_sha256=hashlib.sha256(wasm.read_bytes()).hexdigest(),
                            refusal_transcripts=refusals, navigation_refusal=navigation_refusal,
                            insecure_platform=platform, **expected)
+            receipt['sealed_popup'] = run_popup(driver, page)
             name = 'https-loopback.json'
             if coverage:
                 receipt['profiles'] = save_profiles(profiles, wasm_env['LLVM_PROFILE_FILE'], artifacts)

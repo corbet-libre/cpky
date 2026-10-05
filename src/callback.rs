@@ -1,5 +1,4 @@
 //! Private bounded loopback wire. Secret bytes have no serde or public codec.
-#[cfg(not(target_arch = "wasm32"))]
 use crate::UnlockSecret;
 use crate::{Authentication, Context, Error, PublicCredential, Registration, VaultOutcome};
 use serde::{Deserialize, Serialize};
@@ -149,7 +148,6 @@ pub(crate) fn destination(fragment: &str) -> Result<(url::Url, Zeroizing<String>
     Ok((url, capability))
 }
 
-#[cfg(not(target_arch = "wasm32"))]
 pub(crate) fn decode(
     bytes: &[u8],
     request: &CeremonyRequest,
@@ -179,7 +177,7 @@ pub(crate) fn decode(
     let client_data = crate::options::decode(&public["response"]["clientDataJSON"])?;
     let client_data: Value =
         serde_json::from_slice(&client_data).map_err(|_| Error::InvalidResponse)?;
-    // CLI ceremonies run in the configured top-level page, never an untrusted embed.
+    // Native and sealed popup ceremonies run in the configured top-level page.
     if client_data
         .get("crossOrigin")
         .is_some_and(|v| v != &Value::Bool(false))
@@ -216,7 +214,6 @@ pub(crate) fn decode(
     }
 }
 
-#[cfg(not(target_arch = "wasm32"))]
 fn has_secret_alias(value: &Value) -> bool {
     match value {
         Value::Object(map) => map.iter().any(|(key, value)| {

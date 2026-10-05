@@ -34,6 +34,9 @@ thiserror = "2"
 zeroize = "1"
 url = "2"
 subtle = "2"
+hpke = { version = "0.14", default-features = false, features = ["alloc", "x25519", "chacha"] }
+rand_chacha = "0.10"
+rand_core = "0.10"
 passkey = { version = "0.4", optional = true }
 passkey-types = { version = "0.4", features = ["serialize_bytes_as_base64_string"], optional = true }
 async-trait = { version = "0.1", optional = true }
@@ -49,8 +52,11 @@ reqwest = { version = "0.13", default-features = false, optional = true }
 js-sys = "0.3"
 wasm-bindgen = "0.2"
 wasm-bindgen-futures = "0.4"
+futures-channel = "0.3"
+futures-util = "0.3"
+gloo-timers = "0.3"
 serde-wasm-bindgen = "0.6"
-web-sys = { version = "0.3", features = ["Window", "Navigator", "CredentialsContainer", "CredentialCreationOptions", "CredentialRequestOptions", "AbortController", "AbortSignal", "Location", "History", "Request", "RequestInit", "RequestMode", "RequestCredentials", "RequestCache", "RequestRedirect", "ReferrerPolicy", "Response", "Headers"] }
+web-sys = { version = "0.3", features = ["Window", "Navigator", "CredentialsContainer", "CredentialCreationOptions", "CredentialRequestOptions", "AbortController", "AbortSignal", "Location", "History", "Request", "RequestInit", "RequestMode", "RequestCredentials", "RequestCache", "RequestRedirect", "ReferrerPolicy", "Response", "Headers", "BroadcastChannel", "Event", "MessageEvent", "EventTarget", "Performance", "UserActivation"] }
 getrandom = { version = "0.2", features = ["js"] }
 
 [dev-dependencies]

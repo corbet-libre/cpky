@@ -7,6 +7,8 @@ mod callback;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod native;
 mod options;
+#[cfg(any(target_arch = "wasm32", all(test, feature = "test-authenticator")))]
+mod popup;
 mod secret;
 #[cfg(feature = "test-authenticator")]
 pub mod software;

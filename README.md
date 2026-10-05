@@ -22,3 +22,10 @@ page calls Rust `browser::complete_loopback`; the PRF goes directly to one local
 listener as an opaque Rust result. The software authenticator remains explicitly
 test/development-only. See [the contract](docs/CONTRACT.md#native-browser-ceremony)
 for the origin/capability binding and outstanding real-browser qualification.
+
+The isolated browser frame has a separate owner route: `browser::PopupCeremony`
+and `browser::PopupHandoff`. An ordinary top-level no-opener popup seals the
+credential/PRF result in Wasm with maintained HPKE; only ciphertext crosses its
+bounded same-origin channel. See [sealed popup handover](docs/CONTRACT.md#sealed-popup-handover).
+Runtime composition and browser qualification remain required; this adapter does
+not complete login or initialize member custody.

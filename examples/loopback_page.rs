@@ -1,4 +1,7 @@
 //! Synthetic acceptance page; no secret or credential is exported to JavaScript.
+#[cfg(target_arch = "wasm32")]
+#[path = "support/popup.rs"]
+mod popup;
 /// Run the production callback completion without exposing its secret result.
 #[cfg(target_arch = "wasm32")]
 #[wasm_bindgen::prelude::wasm_bindgen]
