@@ -22,8 +22,16 @@ base="https://github.com/wasm-bindgen/wasm-bindgen/releases/download/${version}"
 mkdir -p "$RUNNER_TEMP/wasm-runner"
 (cd "$RUNNER_TEMP/wasm-runner" && curl --fail --location --retry 3 --remote-name "$base/$archive" && curl --fail --location --retry 3 --remote-name "$base/$archive.sha256sum" && checksum=$(cut -d ' ' -f1 "$archive.sha256sum") && printf '%s  %s\n' "$checksum" "$archive" | sha256sum --check && tar -xzf "$archive" --strip-components=1)
 export PATH="$RUNNER_TEMP/wasm-runner:$PATH"
-python3 -m pip install -r .github/requirements.txt
+python3 -c 'import selenium; print(selenium.__version__)'
+# The nix wrapper `clang` on PATH breaks the wasm32 C build (host glibc
+# headers, wrapper-only flags; minicov hardcodes `clang`); resolve `clang` to
+# the pinned unwrapped compiler for this leg only: the subshell keeps native
+# builds and nightly coverage on the wrapper.
+: "${CPKY_WASM_CLANG_BIN:?Missing unwrapped wasm clang from run-cached.sh}"
+(
+export PATH="$CPKY_WASM_CLANG_BIN:$PATH"
 cargo clippy --locked --target wasm32-unknown-unknown --all-features --lib -- -D warnings
+)
 # Canonical .github/scripts/browser-runner.py hardcodes Service("/usr/bin/chromedriver"), absent from the
 # nix closure (deterministic, not first-run judgment). Adapt exactly the
 # driver-construction line in a job-temp copy (reviewed cwst/cbrd byte pattern):
@@ -60,15 +68,42 @@ grep -F "$CHROMEDRIVER" "$runner_copy"
 grep -F "$CHROME_BIN" "$runner_copy"
 export CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUNNER="python3 $runner_copy"
 export WASM_BINDGEN_USE_BROWSER=1 WASM_BINDGEN_TEST_TIMEOUT=120
+: "${CPKY_WASM_CLANG_BIN:?Missing unwrapped wasm clang from run-cached.sh}"
+(
+export PATH="$CPKY_WASM_CLANG_BIN:$PATH"
 cargo test --locked --target wasm32-unknown-unknown --all-features --lib
+)
 rustup run nightly rustc --version
+NIGHTLY_RUSTC="$(rustup which --toolchain nightly rustc)"
 NIGHTLY_CARGO="$(rustup which --toolchain nightly cargo)"
+NIGHTLY_BIN="$(dirname "$NIGHTLY_RUSTC")"
+# Select nightly exactly as CI's nightly job does; every bare cargo/rustc
+# below (native coverage and wasm coverage) resolves nightly via
+# RUSTC/CARGO/PATH/RUSTUP_TOOLCHAIN. Stable gates above are unaffected.
+export RUSTC="$NIGHTLY_RUSTC"
+export CARGO="$NIGHTLY_CARGO"
+export PATH="$NIGHTLY_BIN:$PATH"
+export RUSTUP_TOOLCHAIN=nightly
 "$NIGHTLY_CARGO" llvm-cov --version
+# Bug 2 isolation: coverage data must not reuse the shared cargo target
+# across jobs (stale checkout paths fail the next gate); scope the
+# coverage target to this job only. Native gates keep the shared warm
+# target; outer traps and services are untouched.
+(
+coverage_target="$(mktemp -d)"
+case "$coverage_target" in ""|"$PWD"/*) echo 'unsafe coverage target' >&2; exit 2;; esac
+trap 'rm -rf -- "$coverage_target"' EXIT
+export CARGO_TARGET_DIR="$coverage_target"
 "$NIGHTLY_CARGO" llvm-cov --locked --branch --all-features --json --output-path coverage.json --ignore-filename-regex '/tests/'
 "$NIGHTLY_CARGO" llvm-cov report --lcov --output-path coverage.lcov --ignore-filename-regex '/tests/'
 python3 .github/scripts/check-source-coverage.py coverage.lcov coverage.json
 export CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUSTFLAGS="-Zno-profiler-runtime -Clink-args=--no-gc-sections --cfg=owned_browser_coverage"
-export WASM_BINDGEN_TEST_ONLY_WEB=1 WASM_BINDGEN_SPLIT_LINKED_MODULES=1 CPKY_COVERAGE=1 CC_wasm32_unknown_unknown=clang
+export WASM_BINDGEN_TEST_ONLY_WEB=1 WASM_BINDGEN_SPLIT_LINKED_MODULES=1 CPKY_COVERAGE=1 CC_wasm32_unknown_unknown="$CPKY_WASM_CLANG"
+: "${CPKY_WASM_CLANG_BIN:?Missing unwrapped wasm clang from run-cached.sh}"
+(
+export PATH="$CPKY_WASM_CLANG_BIN:$PATH"
 "$NIGHTLY_CARGO" llvm-cov test --locked --branch --all-features --lib --coverage-target-only --target wasm32-unknown-unknown --lcov --output-path wasm-coverage.lcov --ignore-filename-regex '/tests/'
+)
 "$NIGHTLY_CARGO" llvm-cov report --target wasm32-unknown-unknown --coverage-target-only --json --output-path wasm-coverage.json --ignore-filename-regex '/tests/'
+)
 python3 .github/scripts/check-source-coverage.py wasm-coverage.lcov wasm-coverage.json

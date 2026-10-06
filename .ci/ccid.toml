@@ -9,11 +9,12 @@ commands = [["bash", "ci/native-check.sh"]]
 [checks.verify]
 kind = "commands"
 commands = [["bash", ".ci/verify.sh"]]
-cache_tools = [["rustc", "-vV"], ["cargo", "--version"], ["python3", "--version"], ["chromedriver", "--version"], ["chromium", "--version"], ["clang", "--version"], ["rustup", "run", "nightly", "rustc", "-vV"], ["rustup", "run", "nightly", "cargo", "llvm-cov", "--version"]]
+cache_tools = [["rustc", "-vV"], ["cargo", "--version"], ["python3", "--version"], ["chromedriver", "--version"], ["chromium", "--version"], ["clang", "--version"], ["pkg-config", "--version"], ["openssl", "version"], ["rustup", "run", "nightly", "rustc", "-vV"], ["rustup", "run", "nightly", "cargo", "llvm-cov", "--version"]]
+cache_env = ["PKG_CONFIG_PATH", "NIX_CFLAGS_COMPILE", "NIX_LDFLAGS", "LD_LIBRARY_PATH", "CPKY_WASM_CLANG"]
 cache_outputs = ["coverage.json", "coverage.lcov", "wasm-coverage.json", "wasm-coverage.lcov"]
 
 [render]
-tool_revision = "81ebac8e86e20bc93b69d5e912bbcb0c0d036d58"
+tool_revision = "77a5ac18542750de020ebf753d22c3200530282b"
 
 [jobs.verify]
 scheduler = "crow"
