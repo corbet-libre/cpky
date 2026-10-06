@@ -1,8 +1,8 @@
 {
   "schema": 1,
   "generator": "ccid render v1",
-  "tool_revision": "81ebac8e86e20bc93b69d5e912bbcb0c0d036d58",
-  "manifest_sha256": "83977775c9e3587be3c5636227f2be4923718f069d8a461f372f3ca932daf3de",
+  "tool_revision": "53c129c2efa3b9279d2ecbc237d15acdfb656d8c",
+  "manifest_sha256": "15d3c8abbf3c1c21d1439fcf1d1914c709bd79d0f8ebff9a9473de1034f38121",
   "jobs": {
     "verify": {
       "job": "verify",
@@ -15,6 +15,15 @@
         "bash",
         ".ci/run-cached.sh"
       ]
+    }
+  },
+  "push_consumers": {
+    "cmsg-v01": {
+      "consumer": "https://git.corbet.ch/corbet-libs/cmsg.git",
+      "branch": "v01",
+      "consumer_branch": "v01",
+      "job": "v01-push",
+      "self_name": "cpky"
     }
   }
 }
