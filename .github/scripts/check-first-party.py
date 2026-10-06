@@ -1,5 +1,7 @@
 #!/usr/bin/env python3
 """Require main declarations and one resolved revision per first-party crate."""
+import argparse
+import json
 import re
 import subprocess
 import sys
@@ -12,7 +14,7 @@ SHA = re.compile(r"^[0-9a-f]{40}$")
 
 
 def check_lock(packages):
-    names = {p['name'] for p in packages if FIRST_PARTY.match(p.get('source', ''))}
+    names = {p['name'] for p in packages if FIRST_PARTY.match(p.get('source') or '')}
     for name in names:
         entries = [p for p in packages if p['name'] == name]
         if len(entries) != 1:
@@ -50,7 +52,7 @@ def self_test():
     source = 'git+' + repo + '?branch=main#' + 'a' * 40
     package = {'name': 'example', 'source': source}
     check_lock([package])
-    check_lock([{'name': 'local'}])
+    check_lock([{'name': 'local'}, {'name': 'workspace', 'source': None}])
     rejects(check_lock, [dict(package, source='git+' + repo + '?rev=' + 'a' * 40 + '#' + 'a' * 40)])
     for packages in ([package, package], [package, {'name': 'example'}],
                      [package, dict(package, source=source[:-1] + 'b')],
@@ -69,14 +71,28 @@ def self_test():
 
 
 if __name__ == '__main__':
+    parser = argparse.ArgumentParser()
+    parser.add_argument('--self-test', action='store_true')
+    parser.add_argument('--archive', action='store_true')
+    parser.add_argument('--metadata', type=Path)
+    args = parser.parse_args()
     self_test()
-    if '--self-test' not in sys.argv:
-        paths = subprocess.check_output(['git', 'ls-files', '-z'], text=True).split('\0')
-        paths = set(paths) | {'Cargo.lock'}
+    if not args.self_test:
+        if args.archive:
+            paths = {str(p) for p in Path('.').rglob('Cargo.toml')
+                     if not {'target', '.git', 'node_modules'}.intersection(p.parts)}
+        else:
+            paths = set(subprocess.check_output(['git', 'ls-files', '-z'], text=True).split('\0'))
+        paths.add('Cargo.lock')
         for name in sorted(paths):
             path = Path(name)
             if path.name == 'Cargo.toml':
                 check_manifest(tomllib.loads(path.read_text()))
             elif path.name == 'Cargo.lock':
                 check_lock(tomllib.loads(path.read_text())['package'])
+        if args.metadata is not None:
+            metadata = json.loads(args.metadata.read_text())
+            if metadata.get('version') != 1 or not metadata.get('packages') or metadata.get('resolve') is None:
+                raise ValueError('Incomplete locked dependency metadata')
+            check_lock(metadata['packages'])
         print('First-party declarations follow main; locked crate revisions are unique')

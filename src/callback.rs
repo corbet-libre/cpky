@@ -1,13 +1,16 @@
 //! Private bounded loopback wire. Secret bytes have no serde or public codec.
-#[cfg(not(target_arch = "wasm32"))]
 use crate::UnlockSecret;
 use crate::{Authentication, Context, Error, PublicCredential, Registration, VaultOutcome};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-#[cfg(any(target_arch = "wasm32", all(test, feature = "test-authenticator")))]
+#[cfg(any(target_arch = "wasm32", feature = "test-authenticator"))]
 use zeroize::Zeroizing;
 
 pub(crate) const MAX_CALLBACK: usize = 262_144;
+
+#[cfg(all(test, any(target_arch = "wasm32", feature = "test-authenticator")))]
+#[path = "../tests/callback.rs"]
+mod tests;
 
 /// The exact requested ceremony; a privileged result cannot become a member registration.
 #[derive(Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -52,7 +55,7 @@ impl CeremonyRequest {
 
 // Header: version, kind, vault outcome, little-endian public length; public JSON;
 // exactly 32 secret bytes only for Ready. Error paths carry no platform messages.
-#[cfg(any(target_arch = "wasm32", all(test, feature = "test-authenticator")))]
+#[cfg(any(target_arch = "wasm32", feature = "test-authenticator"))]
 pub(crate) fn encode(result: CeremonyResult) -> Result<Zeroizing<Vec<u8>>, Error> {
     let (kind, public, secret, state) = match result {
         CeremonyResult::MemberRegistration(value) => {
@@ -84,7 +87,7 @@ pub(crate) fn encode(result: CeremonyResult) -> Result<Zeroizing<Vec<u8>>, Error
     Ok(output)
 }
 
-#[cfg(any(target_arch = "wasm32", all(test, feature = "test-authenticator")))]
+#[cfg(any(target_arch = "wasm32", feature = "test-authenticator"))]
 pub(crate) async fn execute<A: crate::Authenticator>(
     context: Context,
     request: CeremonyRequest,
@@ -109,7 +112,7 @@ pub(crate) async fn execute<A: crate::Authenticator>(
     }
 }
 
-#[cfg(any(target_arch = "wasm32", all(test, feature = "test-authenticator")))]
+#[cfg(any(target_arch = "wasm32", feature = "test-authenticator"))]
 pub(crate) fn destination(fragment: &str) -> Result<(url::Url, Zeroizing<String>), Error> {
     if fragment.len() > 1024 {
         return Err(Error::InvalidOptions);
@@ -137,13 +140,14 @@ pub(crate) fn destination(fragment: &str) -> Result<(url::Url, Zeroizing<String>
             .decode(capability.as_bytes())
             .map_err(|_| Error::InvalidOptions)?,
     );
-    if bytes.len() != 32 || URL_SAFE_NO_PAD.encode(&*bytes) != *capability {
+    // The strict canonical base64url decoder above already rejects every
+    // non-canonical spelling, so only the decoded length remains to check.
+    if bytes.len() != 32 {
         return Err(Error::InvalidOptions);
     }
     Ok((url, capability))
 }
 
-#[cfg(not(target_arch = "wasm32"))]
 pub(crate) fn decode(
     bytes: &[u8],
     request: &CeremonyRequest,
@@ -173,7 +177,7 @@ pub(crate) fn decode(
     let client_data = crate::options::decode(&public["response"]["clientDataJSON"])?;
     let client_data: Value =
         serde_json::from_slice(&client_data).map_err(|_| Error::InvalidResponse)?;
-    // CLI ceremonies run in the configured top-level page, never an untrusted embed.
+    // Native and sealed popup ceremonies run in the configured top-level page.
     if client_data
         .get("crossOrigin")
         .is_some_and(|v| v != &Value::Bool(false))
@@ -210,7 +214,6 @@ pub(crate) fn decode(
     }
 }
 
-#[cfg(not(target_arch = "wasm32"))]
 fn has_secret_alias(value: &Value) -> bool {
     match value {
         Value::Object(map) => map.iter().any(|(key, value)| {

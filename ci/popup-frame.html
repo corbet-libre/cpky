@@ -1,0 +1,18 @@
+<!doctype html><html lang="en"><meta charset="utf-8"><title>Vault owner acceptance</title>
+<button type="button" disabled id="open">Open passkey popup</button>
+<script type="module">
+import init, {PopupFrame} from './loopback_page.js';
+await init();
+let owner = new PopupFrame();
+addEventListener('pagehide', () => { owner?.free(); owner = null; }, {once: true});
+const button = document.getElementById('open'); button.disabled = false;
+document.body.dataset.state = 'ready';
+button.onclick = () => {
+  button.disabled = true;
+  try {
+    owner.open();
+    const pending = owner; owner = null;
+    pending.wait().then(() => { document.body.dataset.state = 'received'; }, () => { document.body.dataset.state = 'refused'; });
+  } catch { document.body.dataset.state = 'refused'; }
+};
+</script></html>

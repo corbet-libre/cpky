@@ -5,7 +5,7 @@ edition = "2024"
 rust-version = "1.88"
 description = "Device Passkeys ceremonies with local opaque PRF handover"
 license = "LGPL-3.0-only WITH LGPL-3.0-linking-exception"
-repository = "https://github.com/corbet-foss/cpky"
+repository = "https://git.corbet.ch/corbet-foss/cpky.git"
 publish = false
 autotests = false
 
@@ -13,12 +13,16 @@ autotests = false
 name = "server"
 path = "tests/server.rs"
 
+[[example]]
+name = "loopback_page"
+crate-type = ["cdylib"]
+
 [lib]
 crate-type = ["rlib"]
 
 [features]
 default = []
-test-authenticator = ["dep:passkey", "dep:passkey-types", "dep:async-trait"]
+test-authenticator = ["dep:passkey", "dep:passkey-types", "dep:async-trait", "dep:reqwest"]
 
 [dependencies]
 base64 = "0.22"
@@ -30,6 +34,9 @@ thiserror = "2"
 zeroize = "1"
 url = "2"
 subtle = "2"
+hpke = { version = "0.14", default-features = false, features = ["alloc", "x25519", "chacha"] }
+rand_chacha = "0.10"
+rand_core = "0.10"
 passkey = { version = "0.4", optional = true }
 passkey-types = { version = "0.4", features = ["serialize_bytes_as_base64_string"], optional = true }
 async-trait = { version = "0.1", optional = true }
@@ -39,13 +46,17 @@ axum = { version = "0.8", default-features = false, features = ["http1", "tokio"
 tokio = { version = "1", features = ["net", "rt", "sync", "time"] }
 getrandom = "0.4"
 webbrowser = "1"
+reqwest = { version = "0.13", default-features = false, optional = true }
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 js-sys = "0.3"
 wasm-bindgen = "0.2"
 wasm-bindgen-futures = "0.4"
+futures-channel = "0.3"
+futures-util = "0.3"
+gloo-timers = "0.3"
 serde-wasm-bindgen = "0.6"
-web-sys = { version = "0.3", features = ["Window", "Navigator", "CredentialsContainer", "CredentialCreationOptions", "CredentialRequestOptions", "AbortController", "AbortSignal", "Location", "History", "Request", "RequestInit", "RequestMode", "RequestCredentials", "RequestCache", "RequestRedirect", "ReferrerPolicy", "Response", "Headers"] }
+web-sys = { version = "0.3", features = ["Window", "Navigator", "CredentialsContainer", "CredentialCreationOptions", "CredentialRequestOptions", "AbortController", "AbortSignal", "Location", "History", "Request", "RequestInit", "RequestMode", "RequestCredentials", "RequestCache", "RequestRedirect", "ReferrerPolicy", "Response", "Headers", "BroadcastChannel", "Event", "MessageEvent", "EventTarget", "Performance", "UserActivation"] }
 getrandom = { version = "0.2", features = ["js"] }
 
 [dev-dependencies]
@@ -54,8 +65,8 @@ static_assertions = "1"
 wasm-bindgen-test = "0.3.79"
 
 [target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
-ckyh = { git = "https://github.com/corbet-foss/ckyh", branch = "main" }
-crlt = { git = "https://github.com/corbet-foss/crlt", branch = "main" }
+ckyh = { git = "https://git.corbet.ch/corbet-foss/ckyh.git", branch = "v01" }
+crlt = { git = "https://git.corbet.ch/corbet-foss/crlt.git", branch = "v01" }
 tempfile = "3"
 tokio = { version = "1", features = ["rt-multi-thread", "test-util"] }
 reqwest = { version = "0.13", default-features = false }

@@ -27,6 +27,12 @@ use url::Url;
 use zeroize::Zeroizing;
 
 const LIFETIME: Duration = Duration::from_secs(120);
+const BODY_LIMIT: Duration = Duration::from_secs(10);
+
+/// Every platform failure is the same coarse refusal; no detail leaves this module.
+fn unavailable<E>(_: E) -> Error {
+    Error::Unavailable
+}
 
 struct Pending {
     context: Context,
@@ -67,12 +73,12 @@ impl BrowserCeremony {
         }
         request.prepare(&context)?;
         let mut entropy = Zeroizing::new([0; 32]);
-        getrandom::fill(entropy.as_mut()).map_err(|_| Error::Unavailable)?;
+        getrandom::fill(entropy.as_mut()).map_err(unavailable)?;
         let capability = Zeroizing::new(URL_SAFE_NO_PAD.encode(*entropy));
         let listener = TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0))
             .await
-            .map_err(|_| Error::Unavailable)?;
-        let address = listener.local_addr().map_err(|_| Error::Unavailable)?;
+            .map_err(unavailable)?;
+        let address = listener.local_addr().map_err(unavailable)?;
         let callback = format!("http://{address}/finish");
         let fragment = url::form_urlencoded::Serializer::new(String::new())
             .append_pair("cpky-v1", &callback)
@@ -121,19 +127,80 @@ impl BrowserCeremony {
     /// Open the prepared ceremony in the platform's default browser using the
     /// maintained browser launcher. Failure leaves cancellation under caller control.
     pub fn open_browser(&self) -> Result<(), Error> {
-        webbrowser::open(self.launch.as_str()).map_err(|_| Error::Unavailable)
+        webbrowser::open(self.launch.as_str()).map_err(unavailable)
+    }
+
+    /// Remaining lifetime for public progress displays. The listener continues
+    /// to enforce its own monotonic deadline independently of the display clock.
+    pub fn remaining_lifetime(&self) -> Duration {
+        self.pending
+            .deadline
+            .saturating_duration_since(tokio::time::Instant::now())
+    }
+
+    /// Exercise the original callback over actual HTTP with the explicitly
+    /// test-only software authenticator. Never selected by production callers.
+    #[cfg(feature = "test-authenticator")]
+    pub async fn complete_with_test_authenticator(
+        &self,
+        platform: crate::software::SoftwareAuthenticator,
+    ) -> Result<(), Error> {
+        let (finish, capability) =
+            callback::destination(self.launch.fragment().ok_or(Error::InvalidOptions)?)?;
+        let client = reqwest::Client::builder()
+            .timeout(BODY_LIMIT)
+            .redirect(reqwest::redirect::Policy::none())
+            .build()
+            .map_err(unavailable)?;
+        let mut request_url = finish.clone();
+        request_url.set_path("/request");
+        let response = client
+            .get(request_url)
+            .header("origin", self.pending.context.origin())
+            .header("x-cpky-capability", capability.as_str())
+            .send()
+            .await
+            .map_err(unavailable)?;
+        if response.status() != reqwest::StatusCode::OK {
+            return Err(Error::InvalidResponse);
+        }
+        let bytes = response.bytes().await.map_err(unavailable)?;
+        if bytes.len() > callback::MAX_CALLBACK {
+            return Err(Error::InvalidResponse);
+        }
+        let request = serde_json::from_slice(&bytes).map_err(|_| Error::InvalidOptions)?;
+        let result = callback::execute(
+            Context::new(self.pending.context.origin(), self.pending.context.rp_id())?,
+            request,
+            platform,
+        )
+        .await?;
+        let frame = callback::encode(result)?;
+        let response = client
+            .post(finish)
+            .header("origin", self.pending.context.origin())
+            .header("x-cpky-capability", capability.as_str())
+            .header("content-type", "application/octet-stream")
+            .body(frame.to_vec())
+            .send()
+            .await
+            .map_err(unavailable)?;
+        if response.status() != reqwest::StatusCode::NO_CONTENT {
+            return Err(Error::InvalidResponse);
+        }
+        Ok(())
     }
 
     /// Consume the one result. Timeout, cancellation, and a closed listener refuse.
     pub async fn wait(mut self) -> Result<CeremonyResult, Error> {
-        let receiver = self.result.take().ok_or(Error::Cancelled)?;
-        let result = tokio::time::timeout_at(self.pending.deadline, receiver)
-            .await
-            .map_err(|_| Error::Cancelled)?
-            .map_err(|_| Error::Cancelled)?;
-        if let Some(shutdown) = self.shutdown.take() {
-            let _ = shutdown.send(());
-        }
+        let receiver = self.result.take().expect("wait consumes the ceremony once");
+        // The pending state owns the sender for this ceremony's whole life, so the
+        // only way to no result is the shared deadline.
+        let Ok(Ok(result)) = tokio::time::timeout_at(self.pending.deadline, receiver).await else {
+            return Err(Error::Cancelled);
+        };
+        // Stopping is requested exactly once, here; a missing handle is impossible.
+        let _ = self.shutdown.take().map(|shutdown| shutdown.send(()));
         // Drain the accepted HTTP response before Drop stops remaining connections.
         let _ = tokio::time::timeout(Duration::from_secs(2), &mut self.server).await;
         Ok(result)
@@ -153,17 +220,17 @@ impl Drop for BrowserCeremony {
     }
 }
 
-fn valid_origin(pending: &Pending, headers: &HeaderMap) -> bool {
+fn valid_origin(pending: &Pending, headers: &HeaderMap, now: tokio::time::Instant) -> bool {
     pending.active.load(Ordering::Acquire)
-        && tokio::time::Instant::now() < pending.deadline
+        && now < pending.deadline
         && headers.get("origin").and_then(|v| v.to_str().ok()) == Some(pending.context.origin())
         && headers.get("host").and_then(|v| v.to_str().ok()) == Some(pending.host.as_str())
         && headers.get_all("origin").iter().count() == 1
         && headers.get_all("host").iter().count() == 1
 }
 
-fn authorized(pending: &Pending, headers: &HeaderMap) -> bool {
-    valid_origin(pending, headers)
+fn authorized(pending: &Pending, headers: &HeaderMap, now: tokio::time::Instant) -> bool {
+    valid_origin(pending, headers, now)
         && headers.get_all("x-cpky-capability").iter().count() == 1
         && headers
             .get("x-cpky-capability")
@@ -173,9 +240,11 @@ fn authorized(pending: &Pending, headers: &HeaderMap) -> bool {
 fn response(pending: &Pending, status: StatusCode, body: impl Into<Body>) -> Response {
     let mut response = (status, body.into()).into_response();
     let headers = response.headers_mut();
-    if let Ok(origin) = HeaderValue::from_str(pending.context.origin()) {
-        headers.insert("access-control-allow-origin", origin);
-    }
+    headers.insert(
+        "access-control-allow-origin",
+        // Context::new only accepts an ASCII serialization of an origin.
+        HeaderValue::from_str(pending.context.origin()).expect("a validated origin is a header"),
+    );
     headers.insert("cache-control", HeaderValue::from_static("no-store"));
     headers.insert("vary", HeaderValue::from_static("Origin"));
     headers.insert(
@@ -186,7 +255,7 @@ fn response(pending: &Pending, status: StatusCode, body: impl Into<Body>) -> Res
 }
 
 fn preflight(pending: &Pending, headers: &HeaderMap, expected: &str) -> Response {
-    if !valid_origin(pending, headers)
+    if !valid_origin(pending, headers, tokio::time::Instant::now())
         || headers
             .get("access-control-request-method")
             .and_then(|v| v.to_str().ok())
@@ -228,22 +297,19 @@ async fn request_options(
     if method == Method::OPTIONS {
         return preflight(&pending, &headers, "GET");
     }
-    if method != Method::GET || !authorized(&pending, &headers) {
+    if method != Method::GET || !authorized(&pending, &headers, tokio::time::Instant::now()) {
         return StatusCode::FORBIDDEN.into_response();
     }
     if pending.sender.lock().await.is_none() {
         return response(&pending, StatusCode::GONE, Body::empty());
     }
-    match serde_json::to_vec(&pending.request) {
-        Ok(bytes) => {
-            let mut result = response(&pending, StatusCode::OK, bytes);
-            result
-                .headers_mut()
-                .insert("content-type", HeaderValue::from_static("application/json"));
-            result
-        }
-        Err(_) => response(&pending, StatusCode::INTERNAL_SERVER_ERROR, Body::empty()),
-    }
+    // A request is plain JSON values and strings; serialization cannot fail.
+    let bytes = serde_json::to_vec(&pending.request).expect("a ceremony request is plain JSON");
+    let mut result = response(&pending, StatusCode::OK, bytes);
+    result
+        .headers_mut()
+        .insert("content-type", HeaderValue::from_static("application/json"));
+    result
 }
 
 async fn finish(
@@ -255,19 +321,18 @@ async fn finish(
     if method == Method::OPTIONS {
         return preflight(&pending, &headers, "POST");
     }
+    let now = tokio::time::Instant::now();
     if method != Method::POST
-        || !authorized(&pending, &headers)
+        || !authorized(&pending, &headers, now)
         || headers.get("content-type").and_then(|v| v.to_str().ok())
             != Some("application/octet-stream")
     {
         return StatusCode::FORBIDDEN.into_response();
     }
-    let bytes = match tokio::time::timeout(
-        Duration::from_secs(10),
-        to_bytes(body, callback::MAX_CALLBACK),
-    )
-    .await
-    {
+    // The body can never outlive the ceremony: its read is bounded by both the
+    // body limit and the time left, so no recheck is needed after the await.
+    let allowed = BODY_LIMIT.min(pending.deadline.saturating_duration_since(now));
+    let bytes = match tokio::time::timeout(allowed, to_bytes(body, callback::MAX_CALLBACK)).await {
         Ok(Ok(bytes)) => Zeroizing::new(bytes.to_vec()),
         _ => return response(&pending, StatusCode::BAD_REQUEST, Body::empty()),
     };
@@ -275,17 +340,17 @@ async fn finish(
         Ok(result) => result,
         Err(_) => return response(&pending, StatusCode::BAD_REQUEST, Body::empty()),
     };
-    if !authorized(&pending, &headers) {
-        return StatusCode::FORBIDDEN.into_response();
-    }
     let mut sender = pending.sender.lock().await;
     let Some(sender) = sender.take() else {
         return response(&pending, StatusCode::GONE, Body::empty());
     };
-    let status = if sender.send(result).is_ok() {
-        StatusCode::NO_CONTENT
-    } else {
-        StatusCode::GONE
-    };
+    // A vanished receiver means the ceremony ended: nothing is delivered.
+    let status = sender
+        .send(result)
+        .map_or(StatusCode::GONE, |()| StatusCode::NO_CONTENT);
     response(&pending, status, Body::empty())
 }
+
+#[cfg(test)]
+#[path = "../tests/native.rs"]
+mod tests;
