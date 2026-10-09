@@ -386,7 +386,7 @@ dependencies = [
 [[package]]
 name = "ckyh"
 version = "0.0.0"
-source = "git+https://github.com/corbet-foss/ckyh?branch=main#cd8544ec9d1bb769692581bc6f1a6b76289f4e52"
+source = "git+https://github.com/corbet-foss/ckyh?branch=main#778a4fd2ed0250f892a5d35f783d75d9abf1f4e2"
 dependencies = [
  "crlt",
  "serde",
@@ -523,7 +523,7 @@ dependencies = [
 [[package]]
 name = "crlt"
 version = "0.0.0"
-source = "git+https://github.com/corbet-foss/crlt?branch=main#9569c591f35f028fbf802a02fc23c6cf5a35bdf6"
+source = "git+https://github.com/corbet-foss/crlt?branch=main#65f4c8f20e5ff097d913e79aa7b69af826d88956"
 dependencies = [
  "deadpool",
  "libsql",
