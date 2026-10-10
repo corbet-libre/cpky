@@ -14,7 +14,7 @@ cache_env = ["PKG_CONFIG_PATH", "NIX_CFLAGS_COMPILE", "NIX_LDFLAGS", "LD_LIBRARY
 cache_outputs = ["coverage.json", "coverage.lcov", "wasm-coverage.json", "wasm-coverage.lcov"]
 
 [render]
-tool_revision = "223adb5a008f4ed1ba36d1f52796ccd29077db6e"
+tool_revision = "78a4e05b4e1cb25aaeba3966951564d74277bcbd"
 
 [jobs.verify]
 scheduler = "crow"
