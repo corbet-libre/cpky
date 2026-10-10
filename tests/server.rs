@@ -49,10 +49,13 @@ fn real_server_accepts_stripped_registration_discovery_and_refuses_revoked_signa
             .unwrap()
             .into_parts();
     let original = prf.import(|bytes| blake3::hash(bytes));
+    let registration_id = public.credential_id().unwrap();
+    assert_eq!(serde_json::to_value(&public).unwrap(), *public.as_json());
     let response = serde_json::from_value(public.into_json()).unwrap();
     let stored = server
         .finish_registration(pending, &response, CreationMonth::new(2026, 10).unwrap())
         .unwrap();
+    assert_eq!(registration_id.as_slice(), stored.credential_id().as_ref());
     let mut fresh = Client::new(
         Context::new(ORIGIN, RP).unwrap(),
         device.into_authenticator().synced_test_device(),
@@ -70,6 +73,9 @@ fn real_server_accepts_stripped_registration_discovery_and_refuses_revoked_signa
         panic!("real PRF required")
     };
     assert_eq!(original, prf.import(|bytes| blake3::hash(bytes)));
+    let assertion_id = public.credential_id().unwrap();
+    assert_eq!(assertion_id, registration_id);
+    assert_eq!(serde_json::to_value(&public).unwrap(), *public.as_json());
     let response = serde_json::from_value(public.into_json()).unwrap();
     let auth = server
         .finish_discoverable_authentication(pending, &response)
