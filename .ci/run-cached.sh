@@ -25,7 +25,7 @@ mkdir -p .moon/cache
 ln -sfn "$state/moon-cache/hashes" .moon/cache/hashes
 ln -sfn "$state/moon-cache/outputs" .moon/cache/outputs
 tool_source=github:NixOS/nixpkgs/b7c2ada94fe99c15b0dbcf4d11fd7850b957a436
-tool_paths=$(nix build --no-link --print-out-paths "$tool_source#moon" "$tool_source#proto" "$tool_source#python3" "$tool_source#chromedriver" "$tool_source#chromium" "$tool_source#clang")
+tool_paths=$(nix build --no-link --print-out-paths "$tool_source#moon" "$tool_source#proto" "$tool_source#python3" "$tool_source#chromedriver" "$tool_source#chromium" "$tool_source#clang" "$tool_source#cargo-llvm-cov" "$tool_source#llvmPackages.clang-unwrapped")
 for path in $tool_paths; do PATH="$path/bin:$PATH"; done
 export PROTO_HOME="$toolchains/proto" RUSTUP_HOME="$toolchains/rustup"
 export CARGO_HOME="$toolchains/cargo" MOON_HOME="$state/moon-home"
