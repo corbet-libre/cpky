@@ -231,11 +231,14 @@ impl Port for PersistentAuthenticator {
             let mut data = AuthenticatorData::from_slice(&credential.response.authenticator_data)
                 .map_err(|_| Error::PrfUnavailable)?;
             // The framing must be exactly a user-verified attested registration.
-            if !data.flags.contains(Flags::UP | Flags::UV | Flags::AT)
-                || data.flags.intersects(Flags::BE | Flags::BS)
-                || data.counter.unwrap_or(0) != 0
-            {
-                return Err(Error::CeremonyMismatch);
+            if !data.flags.contains(Flags::UP | Flags::UV | Flags::AT) {
+                return Err(Error::InvalidPrf);
+            }
+            if data.flags.intersects(Flags::BE | Flags::BS) {
+                return Err(Error::WrongContext);
+            }
+            if data.counter.unwrap_or(0) != 0 {
+                return Err(Error::InvalidOptions);
             }
             data.attested_credential_data = Some(
                 AttestedCredentialData::new(
