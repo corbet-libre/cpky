@@ -91,3 +91,48 @@ fn seed_credential_registers_and_a_fresh_instance_signs_in_with_the_same_prf() {
         );
     }
 }
+
+mod no_leak {
+    use super::*;
+    use static_assertions::assert_not_impl_any;
+    use std::fmt::{Debug, Display};
+
+    // No formatting or serialization path exists for the authenticator at all.
+    assert_not_impl_any!(PersistentAuthenticator: Debug, Display, serde::Serialize, Clone);
+
+    #[test]
+    fn errors_and_refusals_never_contain_seed_bytes() {
+        let seed = [0xA7u8; 32];
+        let hex: String = seed.iter().map(|byte| format!("{byte:02x}")).collect();
+        let b64 = {
+            use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
+            URL_SAFE_NO_PAD.encode(seed)
+        };
+        let mut texts = Vec::new();
+        // Refused constructions (zero seed, bad origin).
+        for result in [
+            PersistentAuthenticator::new(ORIGIN, Zeroizing::new([0; 32])),
+            PersistentAuthenticator::new("not a url", Zeroizing::new(seed)),
+        ] {
+            let error = result.err().expect("construction must be refused");
+            texts.push(format!("{error} {error:?}"));
+        }
+        // A ceremony with unusable options fails without echoing anything secret.
+        let mut device = Client::new(
+            Context::new(ORIGIN, RP).unwrap(),
+            PersistentAuthenticator::new(ORIGIN, Zeroizing::new(seed)).unwrap(),
+        );
+        let error = futures::executor::block_on(device.register_member(serde_json::json!({})))
+            .err()
+            .expect("empty options must be refused");
+        texts.push(format!("{error} {error:?}"));
+        let error =
+            futures::executor::block_on(device.sign_in(serde_json::json!({"publicKey": 1})))
+                .err()
+                .expect("malformed options must be refused");
+        texts.push(format!("{error} {error:?}"));
+        for text in texts {
+            assert!(!text.contains(&hex) && !text.contains(&b64) && !text.contains("a7a7a7a7"));
+        }
+    }
+}
