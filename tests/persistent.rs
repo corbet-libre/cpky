@@ -79,9 +79,15 @@ fn seed_credential_registers_and_a_fresh_instance_signs_in_with_the_same_prf() {
     // A different seed has a different credential: the server finds nothing.
     let mut other = device(8);
     let (options, pending) = server.start_discoverable_authentication().unwrap();
-    if let Ok(done) = futures::executor::block_on(other.sign_in(serde_json::to_value(options).unwrap())) {
+    if let Ok(done) =
+        futures::executor::block_on(other.sign_in(serde_json::to_value(options).unwrap()))
+    {
         let (public, _) = done.into_parts();
         let response = serde_json::from_value(public.into_json()).unwrap();
-        assert!(server.finish_discoverable_authentication(pending, &response).is_err());
+        assert!(
+            server
+                .finish_discoverable_authentication(pending, &response)
+                .is_err()
+        );
     }
 }

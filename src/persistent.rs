@@ -127,13 +127,14 @@ impl PersistentAuthenticator {
             info.push(0);
             info.extend_from_slice(rp_id.as_bytes());
             let mut out = Zeroizing::new([0u8; 32]);
-            hk.expand(&info, out.as_mut()).map_err(|_| Error::WrongContext)?;
+            hk.expand(&info, out.as_mut())
+                .map_err(|_| Error::WrongContext)?;
             Ok(out)
         };
         // A non-scalar output has probability about 2^-128; the result is
         // deterministic, so it would be a stable refusal, never a retry.
-        let key = SecretKey::from_slice(expand("p256-key")?.as_ref())
-            .map_err(|_| Error::WrongContext)?;
+        let key =
+            SecretKey::from_slice(expand("p256-key")?.as_ref()).map_err(|_| Error::WrongContext)?;
         Ok(Material {
             key,
             credential_id: expand("credential-id")?.to_vec(),
@@ -157,7 +158,9 @@ impl PersistentAuthenticator {
 
 fn cose_pair(key: &SecretKey) -> (coset::CoseKey, coset::CoseKey) {
     use coset::{CoseKeyBuilder, iana};
-    let point = SigningKey::from(key).verifying_key().to_encoded_point(false);
+    let point = SigningKey::from(key)
+        .verifying_key()
+        .to_encoded_point(false);
     // An uncompressed point always carries both coordinates.
     let x = point.x().map(|v| v.to_vec()).unwrap_or_default();
     let y = point.y().map(|v| v.to_vec()).unwrap_or_default();
@@ -176,7 +179,11 @@ fn cose_pair(key: &SecretKey) -> (coset::CoseKey, coset::CoseKey) {
     (private, public)
 }
 
-fn passkey(material: &Material, rp_id: &str, user_handle: Option<Bytes>) -> (Passkey, coset::CoseKey) {
+fn passkey(
+    material: &Material,
+    rp_id: &str,
+    user_handle: Option<Bytes>,
+) -> (Passkey, coset::CoseKey) {
     let (private, public) = cose_pair(&material.key);
     (
         Passkey {
@@ -206,10 +213,11 @@ impl Port for PersistentAuthenticator {
         if create {
             // Upstream registration with an empty store. PRF evaluation at create is
             // not enabled: the upstream's random secrets would not match ours.
-            let auth = Authenticator::new(Aaguid::new_empty(), None::<Passkey>, User)
-                .hmac_secret(config);
+            let auth =
+                Authenticator::new(Aaguid::new_empty(), None::<Passkey>, User).hmac_secret(config);
             let mut client = Client::new(auth);
-            let options = serde_json::from_value(options.clone()).map_err(|_| Error::InvalidOptions)?;
+            let options =
+                serde_json::from_value(options.clone()).map_err(|_| Error::InvalidOptions)?;
             let mut credential = client
                 .register(&self.origin, options, DefaultClientData)
                 .await
@@ -242,7 +250,10 @@ impl Port for PersistentAuthenticator {
             let attestation = Value::Map(vec![
                 (Value::Text("fmt".into()), Value::Text("none".into())),
                 (Value::Text("attStmt".into()), Value::Map(Vec::new())),
-                (Value::Text("authData".into()), Value::Bytes(auth_data.clone())),
+                (
+                    Value::Text("authData".into()),
+                    Value::Bytes(auth_data.clone()),
+                ),
             ]);
             let mut attestation_object = Vec::with_capacity(auth_data.len() + 32);
             ciborium::ser::into_writer(&attestation, &mut attestation_object)
