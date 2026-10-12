@@ -1,8 +1,9 @@
 //! Deterministic software authenticator for an operator identity whose 32-byte
 //! seed lives in an external secret store (sops). It presents an ordinary
-//! WebAuthn credential: attestation `none`, authenticator data flags UP|UV|AT
-//! (plus ED when the stock extension data is present), a P-256 ES256 COSE key,
-//! signature counter 0, no backup flags. The server needs no special path and
+//! WebAuthn credential: attestation `none`, authenticator data flags UP|UV|AT|BE|BS
+//! (plus ED when the stock extension data is present; BE/BS are the upstream's
+//! and are right for a credential any device can rebuild from the seed), a
+//! P-256 ES256 COSE key, signature counter 0. The server needs no special path and
 //! sees no marker. User verification is asserted: possession of the seed is the
 //! verification the operator delegated.
 //!
@@ -229,16 +230,12 @@ impl Port for PersistentAuthenticator {
                 .and_then(|stored| stored.user_handle.clone());
             let (_, public) = cose_pair(&material.key);
             let mut data = AuthenticatorData::from_slice(&credential.response.authenticator_data)
-                .map_err(|_| Error::PrfUnavailable)?;
+                .map_err(|_| Error::InvalidResponse)?;
             // The framing must be exactly a user-verified attested registration.
-            if !data.flags.contains(Flags::UP | Flags::UV | Flags::AT) {
-                return Err(Error::InvalidPrf);
-            }
-            if data.flags.intersects(Flags::BE | Flags::BS) {
-                return Err(Error::WrongContext);
-            }
-            if data.counter.unwrap_or(0) != 0 {
-                return Err(Error::InvalidOptions);
+            if !data.flags.contains(Flags::UP | Flags::UV | Flags::AT)
+                || data.counter.unwrap_or(0) != 0
+            {
+                return Err(Error::InvalidResponse);
             }
             data.attested_credential_data = Some(
                 AttestedCredentialData::new(
@@ -246,7 +243,7 @@ impl Port for PersistentAuthenticator {
                     material.credential_id.clone(),
                     public.clone(),
                 )
-                .map_err(|_| Error::InvalidPrf)?,
+                .map_err(|_| Error::InvalidResponse)?,
             );
             let auth_data = data.to_vec();
             use ciborium::Value;
@@ -260,13 +257,13 @@ impl Port for PersistentAuthenticator {
             ]);
             let mut attestation_object = Vec::with_capacity(auth_data.len() + 32);
             ciborium::ser::into_writer(&attestation, &mut attestation_object)
-                .map_err(|_| Error::WrongContext)?;
+                .map_err(|_| Error::InvalidResponse)?;
             credential.id = encoding::base64url(&material.credential_id);
             credential.raw_id = material.credential_id.clone().into();
             credential.response.authenticator_data = auth_data.into();
             credential.response.attestation_object = attestation_object.into();
             credential.response.public_key =
-                Some(public_key_der_from_cose_key(&public).map_err(|_| Error::InvalidOptions)?);
+                Some(public_key_der_from_cose_key(&public).map_err(|_| Error::InvalidResponse)?);
             self.user_handle = user_handle;
             return split(credential);
         }
