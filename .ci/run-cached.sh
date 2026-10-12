@@ -28,6 +28,8 @@ tool_source=github:NixOS/nixpkgs/b7c2ada94fe99c15b0dbcf4d11fd7850b957a436
 tool_paths=$(nix build --no-link --print-out-paths "$tool_source#moon" "$tool_source#proto" "$tool_source#python3" "$tool_source#chromedriver" "$tool_source#chromium" "$tool_source#clang" "$tool_source#cargo-llvm-cov" "$tool_source#llvmPackages.clang-unwrapped" "$tool_source#pkg-config" "$tool_source#openssl" "$tool_source#openssl.dev")
 for path in $tool_paths; do PATH="$path/bin:$PATH"; [ -d "$path/lib/pkgconfig" ] && PKG_CONFIG_PATH="$path/lib/pkgconfig:${PKG_CONFIG_PATH:-}"; done
 export PKG_CONFIG_PATH
+openssl_out=$(nix build --no-link --print-out-paths "$tool_source#openssl.out")
+export LD_LIBRARY_PATH="$openssl_out/lib:${LD_LIBRARY_PATH:-}"
 export PROTO_HOME="$toolchains/proto" RUSTUP_HOME="$toolchains/rustup"
 export CARGO_HOME="$toolchains/cargo" MOON_HOME="$state/moon-home"
 export PROTO_AUTO_CLEAN=false PROTO_TELEMETRY=false PROTO_YES=true
