@@ -13,6 +13,10 @@ autotests = false
 name = "server"
 path = "tests/server.rs"
 
+[[test]]
+name = "persistent"
+path = "tests/persistent.rs"
+
 [[example]]
 name = "loopback_page"
 crate-type = ["cdylib"]
@@ -23,6 +27,9 @@ crate-type = ["rlib"]
 [features]
 default = []
 test-authenticator = ["dep:passkey", "dep:passkey-types", "dep:async-trait", "dep:reqwest"]
+# Deterministic software credential for an operator identity whose seed is held in
+# an external secret store. Never part of a default or browser build.
+persistent-software = ["dep:passkey", "dep:passkey-types", "dep:async-trait", "dep:hkdf", "dep:p256", "dep:coset", "dep:ciborium"]
 
 [dependencies]
 base64 = "0.22"
@@ -40,6 +47,10 @@ rand_core = "0.10"
 passkey = { version = "0.4", optional = true }
 passkey-types = { version = "0.4", features = ["serialize_bytes_as_base64_string"], optional = true }
 async-trait = { version = "0.1", optional = true }
+hkdf = { version = "0.12", optional = true }
+p256 = { version = "0.13", default-features = false, features = ["ecdsa-core", "ecdsa"], optional = true }
+coset = { version = "0.3", optional = true }
+ciborium = { version = "0.2", optional = true }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 axum = { version = "0.8", default-features = false, features = ["http1", "tokio"] }

@@ -10,6 +10,8 @@ mod options;
 #[cfg(any(target_arch = "wasm32", all(test, feature = "test-authenticator")))]
 mod popup;
 mod secret;
+#[cfg(feature = "persistent-software")]
+pub mod persistent;
 #[cfg(feature = "test-authenticator")]
 pub mod software;
 
