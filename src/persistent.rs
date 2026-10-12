@@ -229,13 +229,13 @@ impl Port for PersistentAuthenticator {
                 .and_then(|stored| stored.user_handle.clone());
             let (_, public) = cose_pair(&material.key);
             let mut data = AuthenticatorData::from_slice(&credential.response.authenticator_data)
-                .map_err(|_| Error::InvalidResponse)?;
+                .map_err(|_| Error::PrfUnavailable)?;
             // The framing must be exactly a user-verified attested registration.
             if !data.flags.contains(Flags::UP | Flags::UV | Flags::AT)
                 || data.flags.intersects(Flags::BE | Flags::BS)
                 || data.counter.unwrap_or(0) != 0
             {
-                return Err(Error::InvalidResponse);
+                return Err(Error::CeremonyMismatch);
             }
             data.attested_credential_data = Some(
                 AttestedCredentialData::new(
@@ -243,7 +243,7 @@ impl Port for PersistentAuthenticator {
                     material.credential_id.clone(),
                     public.clone(),
                 )
-                .map_err(|_| Error::InvalidResponse)?,
+                .map_err(|_| Error::InvalidPrf)?,
             );
             let auth_data = data.to_vec();
             use ciborium::Value;
@@ -257,13 +257,13 @@ impl Port for PersistentAuthenticator {
             ]);
             let mut attestation_object = Vec::with_capacity(auth_data.len() + 32);
             ciborium::ser::into_writer(&attestation, &mut attestation_object)
-                .map_err(|_| Error::InvalidResponse)?;
+                .map_err(|_| Error::WrongContext)?;
             credential.id = encoding::base64url(&material.credential_id);
             credential.raw_id = material.credential_id.clone().into();
             credential.response.authenticator_data = auth_data.into();
             credential.response.attestation_object = attestation_object.into();
             credential.response.public_key =
-                Some(public_key_der_from_cose_key(&public).map_err(|_| Error::InvalidResponse)?);
+                Some(public_key_der_from_cose_key(&public).map_err(|_| Error::InvalidOptions)?);
             self.user_handle = user_handle;
             return split(credential);
         }
