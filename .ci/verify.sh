@@ -25,12 +25,6 @@ export PATH="$RUNNER_TEMP/wasm-runner:$PATH"
 # Selenium comes from the pinned Nix tool set (run-cached.sh), not pip (nixpkgs python3 ships no pip).
 python3 -c 'import selenium' || { echo "selenium is not provisioned; browser tests need it" >&2; exit 2; }
 cargo clippy --locked --target wasm32-unknown-unknown --all-features --lib -- -D warnings
-# Canonical .github/scripts/browser-runner.py hardcodes Service("/usr/bin/chromedriver"), absent from the
-# nix closure (deterministic, not first-run judgment). Adapt exactly the
-# driver-construction line in a job-temp copy (reviewed cwst/cbrd byte pattern):
-# service path -> provisioned $CHROMEDRIVER, binary_location -> $CHROME_BIN.
-# Canonical tests/options preserved byte for byte (diff audit 1 removed/2 added).
-# Global filesystem untouched; stock runner discovery via PATH shim only.
 export CHROMEDRIVER="${CHROMEDRIVER:-$(command -v chromedriver)}"
 export CHROME_BIN="${CHROME_BIN:-$(command -v chromium)}"
 test -x "$CHROMEDRIVER" || { echo "missing chromedriver at $CHROMEDRIVER" >&2; exit 2; }
@@ -38,27 +32,8 @@ test -x "$CHROME_BIN" || { echo "missing chromium at $CHROME_BIN" >&2; exit 2; }
 mkdir -p "$RUNNER_TEMP/bin"
 ln -sf "$CHROME_BIN" "$RUNNER_TEMP/bin/google-chrome"
 export PATH="$RUNNER_TEMP/bin:$PATH"
-runner_src=.github/scripts/browser-runner.py
-runner_copy="$RUNNER_TEMP/browser-runner.py"
-anchor_hits=$(grep -cF 'driver = webdriver.Chrome(service=Service("/usr/bin/chromedriver"), options=options)' "$runner_src" || true)
-test "$anchor_hits" -eq 1
-existing_binary_location=$(grep -cF 'binary_location' "$runner_src" || true)
-test "$existing_binary_location" -eq 0
-python3 - "$runner_src" "$runner_copy" "$CHROMEDRIVER" "$CHROME_BIN" <<'PYEOF'
-import sys
-src, dst, driver, chrome = sys.argv[1:5]
-text = open(src).read()
-anchor = 'driver = webdriver.Chrome(service=Service("/usr/bin/chromedriver"), options=options)'
-assert text.count(anchor) == 1, 'runner driver-construction text drifted'
-replacement = 'options.binary_location = "' + chrome + '"\n        driver = webdriver.Chrome(service=Service("' + driver + '"), options=options)'
-open(dst, 'w').write(text.replace(anchor, replacement))
-PYEOF
-drift_removed=$(diff "$runner_src" "$runner_copy" | grep -c '^<' || true)
-drift_added=$(diff "$runner_src" "$runner_copy" | grep -c '^>' || true)
-test "$drift_removed" -eq 1
-test "$drift_added" -eq 2
-grep -F "$CHROMEDRIVER" "$runner_copy"
-grep -F "$CHROME_BIN" "$runner_copy"
+# The canonical runner reads CHROMEDRIVER and CHROME_BIN from the environment (no patch needed).
+runner_copy=.github/scripts/browser-runner.py
 export CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUNNER="python3 $runner_copy"
 export WASM_BINDGEN_USE_BROWSER=1 WASM_BINDGEN_TEST_TIMEOUT=120
 cargo test --locked --target wasm32-unknown-unknown --all-features --lib
