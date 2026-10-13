@@ -28,6 +28,10 @@ tool_source=github:NixOS/nixpkgs/b7c2ada94fe99c15b0dbcf4d11fd7850b957a436
 tool_paths=$(nix build --no-link --print-out-paths "$tool_source#moon" "$tool_source#proto" "$tool_source#python3" "$tool_source#chromedriver" "$tool_source#chromium" "$tool_source#clang" "$tool_source#cargo-llvm-cov" "$tool_source#llvmPackages.clang-unwrapped" "$tool_source#pkg-config" "$tool_source#openssl" "$tool_source#openssl.dev")
 for path in $tool_paths; do PATH="$path/bin:$PATH"; [ -d "$path/lib/pkgconfig" ] && PKG_CONFIG_PATH="$path/lib/pkgconfig:${PKG_CONFIG_PATH:-}"; done
 export PKG_CONFIG_PATH
+# Python with selenium from Nix (nixpkgs python3 has no pip; the browser runners import selenium).
+py_env=$(nix build --impure --no-link --print-out-paths --expr "(builtins.getFlake \"$tool_source\").legacyPackages.\${builtins.currentSystem}.python3.withPackages (ps: [ ps.selenium ])")
+test -x "$py_env/bin/python3" || { echo 'python3 with selenium not built' >&2; exit 2; }
+export PATH="$py_env/bin:$PATH"
 openssl_out=$(nix build --no-link --print-out-paths "$tool_source#openssl.out")
 export LD_LIBRARY_PATH="$openssl_out/lib:${LD_LIBRARY_PATH:-}"
 export PROTO_HOME="$toolchains/proto" RUSTUP_HOME="$toolchains/rustup"
@@ -59,6 +63,13 @@ toolchain_ensure
 cargo_bin=$("$CARGO_HOME/bin/rustup" which --toolchain stable cargo)
 test -x "$cargo_bin"
 export PATH="$(dirname "$cargo_bin"):$PATH"
+# wasm32 C code (minicov) needs an UNWRAPPED clang and llvm-ar: the Nix wrapper targets the host and leaks glibc headers.
+wasm_llvm=$(nix build --no-link --print-out-paths "$tool_source#llvmPackages.clang-unwrapped" "$tool_source#llvmPackages.llvm")
+for path in $wasm_llvm; do
+  [ -x "$path/bin/clang" ] && wasm_cc="$path/bin/clang"
+  [ -x "$path/bin/llvm-ar" ] && wasm_ar="$path/bin/llvm-ar"
+done
+test -x "${wasm_cc:-}" && test -x "${wasm_ar:-}" || { echo 'unwrapped clang/llvm-ar not found' >&2; exit 2; }
 export CARGO_INSTALL_ROOT="$state/install-bin"
 mkdir -p "$CARGO_INSTALL_ROOT/bin"
 export PATH="$CARGO_INSTALL_ROOT/bin:$PATH"
@@ -77,5 +88,10 @@ chromedriver --version
 chromium --version
 rustup run nightly rustc -vV
 rustup run nightly cargo llvm-cov --version
+# Checks inherit only PATH, not CC_* variables: shadow clang and llvm-ar for wasm32 with the unwrapped tools.
+mkdir -p "$state/wasm-bin"
+ln -sfn "$wasm_cc" "$state/wasm-bin/clang"
+ln -sfn "$wasm_ar" "$state/wasm-bin/llvm-ar"
+export PATH="$state/wasm-bin:$PATH"
 "$CCID_BIN" cached --repo "$PWD" --check verify
 test -s ".ccid/results/verify.jsonl"
