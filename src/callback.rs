@@ -3,7 +3,7 @@ use crate::UnlockSecret;
 use crate::{Authentication, Context, Error, PublicCredential, Registration, VaultOutcome};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-#[cfg(any(target_arch = "wasm32", feature = "test-authenticator"))]
+#[cfg(any(target_arch = "wasm32", feature = "embedded-authenticator"))]
 use zeroize::Zeroizing;
 
 pub(crate) const MAX_CALLBACK: usize = 262_144;
@@ -55,7 +55,7 @@ impl CeremonyRequest {
 
 // Header: version, kind, vault outcome, little-endian public length; public JSON;
 // exactly 32 secret bytes only for Ready. Error paths carry no platform messages.
-#[cfg(any(target_arch = "wasm32", feature = "test-authenticator"))]
+#[cfg(any(target_arch = "wasm32", feature = "embedded-authenticator"))]
 pub(crate) fn encode(result: CeremonyResult) -> Result<Zeroizing<Vec<u8>>, Error> {
     let (kind, public, secret, state) = match result {
         CeremonyResult::MemberRegistration(value) => {
@@ -87,7 +87,7 @@ pub(crate) fn encode(result: CeremonyResult) -> Result<Zeroizing<Vec<u8>>, Error
     Ok(output)
 }
 
-#[cfg(any(target_arch = "wasm32", feature = "test-authenticator"))]
+#[cfg(any(target_arch = "wasm32", feature = "embedded-authenticator"))]
 pub(crate) async fn execute<A: crate::Authenticator>(
     context: Context,
     request: CeremonyRequest,
@@ -112,7 +112,7 @@ pub(crate) async fn execute<A: crate::Authenticator>(
     }
 }
 
-#[cfg(any(target_arch = "wasm32", feature = "test-authenticator"))]
+#[cfg(any(target_arch = "wasm32", feature = "embedded-authenticator"))]
 pub(crate) fn destination(fragment: &str) -> Result<(url::Url, Zeroizing<String>), Error> {
     if fragment.len() > 1024 {
         return Err(Error::InvalidOptions);

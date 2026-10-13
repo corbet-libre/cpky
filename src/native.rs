@@ -145,6 +145,18 @@ impl BrowserCeremony {
         &self,
         platform: crate::software::SoftwareAuthenticator,
     ) -> Result<(), Error> {
+        self.complete_with_authenticator(platform).await
+    }
+
+    /// Complete this ceremony through the real local callback with an
+    /// authenticator the trusted native embedding owns (for example a seed-held
+    /// operator credential). The browser is never opened; the caller selects this
+    /// path in code, never through configuration or request data.
+    #[cfg(feature = "embedded-authenticator")]
+    pub async fn complete_with_authenticator<A: crate::Authenticator>(
+        &self,
+        platform: A,
+    ) -> Result<(), Error> {
         let (finish, capability) =
             callback::destination(self.launch.fragment().ok_or(Error::InvalidOptions)?)?;
         let client = reqwest::Client::builder()
