@@ -38,7 +38,11 @@ export CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUNNER="python3 $runner_copy"
 export WASM_BINDGEN_USE_BROWSER=1 WASM_BINDGEN_TEST_TIMEOUT=120
 cargo test --locked --target wasm32-unknown-unknown --all-features --lib
 rustup run nightly rustc --version
+NIGHTLY_RUSTC="$(rustup which --toolchain nightly rustc)"
 NIGHTLY_CARGO="$(rustup which --toolchain nightly cargo)"
+# Coverage needs the nightly compiler for every rustc call, also behind sccache.
+export RUSTC="$NIGHTLY_RUSTC" CARGO="$NIGHTLY_CARGO" RUSTUP_TOOLCHAIN=nightly
+export PATH="$(dirname "$NIGHTLY_RUSTC"):$PATH"
 "$NIGHTLY_CARGO" llvm-cov --version
 "$NIGHTLY_CARGO" llvm-cov --locked --branch --all-features --json --output-path coverage.json --ignore-filename-regex '/tests/'
 "$NIGHTLY_CARGO" llvm-cov report --lcov --output-path coverage.lcov --ignore-filename-regex '/tests/'

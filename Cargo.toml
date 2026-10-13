@@ -26,7 +26,11 @@ crate-type = ["rlib"]
 
 [features]
 default = []
-test-authenticator = ["dep:passkey", "dep:passkey-types", "dep:async-trait", "dep:reqwest"]
+# Complete a native browser ceremony with a caller-supplied authenticator over the
+# real local callback. For trusted native embeddings only; never a default or
+# browser build.
+embedded-authenticator = ["dep:reqwest"]
+test-authenticator = ["embedded-authenticator", "dep:passkey", "dep:passkey-types", "dep:async-trait"]
 # Deterministic software credential for an operator identity whose seed is held in
 # an external secret store. Never part of a default or browser build.
 persistent-software = ["dep:passkey", "dep:passkey-types", "dep:async-trait", "dep:hkdf", "dep:p256", "dep:coset", "dep:ciborium"]
