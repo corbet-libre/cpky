@@ -9,6 +9,8 @@ use wasm_bindgen::{JsCast, JsValue};
 use wasm_bindgen_futures::JsFuture;
 use zeroize::Zeroizing;
 
+pub use crate::popup::{PopupCeremony, PopupHandoff};
+
 /// Actual navigator.credentials adapter. Workers and absent platforms refuse.
 pub struct Browser;
 impl sealed::Sealed for Browser {}
@@ -28,9 +30,6 @@ impl Authenticator for Browser {
         let credential = JsFuture::from(promise)
             .await
             .map_err(|_| Error::Cancelled)?;
-        if credential.is_null() || credential.is_undefined() {
-            return Err(Error::Cancelled);
-        }
         split(&credential, create)
     }
 }
@@ -156,6 +155,10 @@ fn take_prf(prf: &JsValue) -> (bool, Result<Option<UnlockSecret>, Error>) {
 }
 
 fn split(credential: &JsValue, create: bool) -> Result<PlatformResult, Error> {
+    // All platform-result shape checks belong to this conversion boundary.
+    if credential.is_null() || credential.is_undefined() {
+        return Err(Error::Cancelled);
+    }
     let method = get(credential, "getClientExtensionResults")?
         .dyn_into::<Function>()
         .map_err(|_| Error::InvalidResponse)?;
@@ -232,58 +235,128 @@ mod tests;
 /// The launch fragment is consumed before I/O. Secret output goes directly to the
 /// numeric loopback listener, never to a product API, URL, storage, or JS export.
 pub async fn complete_loopback(context: crate::Context) -> Result<(), Error> {
-    let window = web_sys::window().ok_or(Error::Unavailable)?;
-    if window.location().origin().map_err(|_| Error::Unavailable)? != context.origin() {
-        return Err(Error::WrongContext);
+    LoopbackCeremony::prepare(context)?.complete().await
+}
+
+/// An inspected one-use CLI callback. The capability is consumed from the
+/// address bar before this value exists; no request or authenticator runs until
+/// the trusted page explicitly completes it. No field is exported to JavaScript.
+pub struct LoopbackCeremony {
+    context: crate::Context,
+    finish: url::Url,
+    capability: Zeroizing<String>,
+}
+
+impl LoopbackCeremony {
+    /// Accept a launch removed synchronously by the trusted vault page before
+    /// loading Wasm. Require observable consumption and the same exact origin;
+    /// the original one-use listener still authenticates the capability.
+    pub fn from_consumed_fragment(context: crate::Context, fragment: &str) -> Result<Self, Error> {
+        let window = web_sys::window().ok_or(Error::Unavailable)?;
+        let top = window
+            .top()
+            .map_err(|_| Error::Unavailable)?
+            .ok_or(Error::Unavailable)?;
+        if !js_sys::Object::is(window.as_ref(), top.as_ref())
+            || window.location().origin().map_err(|_| Error::Unavailable)? != context.origin()
+            || !window
+                .location()
+                .hash()
+                .map_err(|_| Error::Unavailable)?
+                .is_empty()
+        {
+            return Err(Error::WrongContext);
+        }
+        let (finish, capability) =
+            crate::callback::destination(fragment.strip_prefix('#').ok_or(Error::InvalidOptions)?)?;
+        Ok(Self {
+            context,
+            finish,
+            capability,
+        })
     }
-    let fragment = Zeroizing::new(
+
+    /// Consume the original launch fragment without network or WebAuthn work.
+    pub fn prepare(context: crate::Context) -> Result<Self, Error> {
+        let window = web_sys::window().ok_or(Error::Unavailable)?;
+        if window.location().origin().map_err(|_| Error::Unavailable)? != context.origin() {
+            return Err(Error::WrongContext);
+        }
+        let fragment = Zeroizing::new(
+            window
+                .location()
+                .hash()
+                .map_err(|_| Error::InvalidOptions)?,
+        );
+        let (finish, capability) =
+            crate::callback::destination(fragment.strip_prefix('#').ok_or(Error::InvalidOptions)?)?;
+        let mut page = url::Url::parse(&window.location().href().map_err(|_| Error::Unavailable)?)
+            .map_err(|_| Error::WrongContext)?;
+        page.set_fragment(None);
         window
+            .history()
+            .map_err(|_| Error::Unavailable)?
+            .replace_state_with_url(&JsValue::NULL, "", Some(page.as_str()))
+            .map_err(|_| Error::Unavailable)?;
+        // Navigation API cancellation can leave the old URL intact even when
+        // replaceState returns normally. Consume the capability before any I/O.
+        if !window
             .location()
             .hash()
-            .map_err(|_| Error::InvalidOptions)?,
-    );
-    let (finish, capability) =
-        crate::callback::destination(fragment.strip_prefix('#').ok_or(Error::InvalidOptions)?)?;
-    let mut page = url::Url::parse(&window.location().href().map_err(|_| Error::Unavailable)?)
-        .map_err(|_| Error::WrongContext)?;
-    page.set_fragment(None);
-    window
-        .history()
-        .map_err(|_| Error::Unavailable)?
-        .replace_state_with_url(&JsValue::NULL, "", Some(page.as_str()))
-        .map_err(|_| Error::Unavailable)?;
-    let mut request_url = finish.clone();
-    request_url.set_path("/request");
-    let (response, _request_cancel) =
-        loopback_fetch(&request_url, "GET", &capability, None).await?;
-    let length: usize = response
-        .headers()
-        .get("content-length")
-        .map_err(|_| Error::InvalidResponse)?
-        .ok_or(Error::InvalidResponse)?
-        .parse()
+            .map_err(|_| Error::Unavailable)?
+            .is_empty()
+        {
+            return Err(Error::Unavailable);
+        }
+        Ok(Self {
+            context,
+            finish,
+            capability,
+        })
+    }
+
+    /// Perform the original callback once after an explicit user gesture.
+    /// Dropping this future aborts any fetch or platform ceremony in progress.
+    pub async fn complete(self) -> Result<(), Error> {
+        let Self {
+            context,
+            finish,
+            capability,
+        } = self;
+        let mut request_url = finish.clone();
+        request_url.set_path("/request");
+        let (response, _request_cancel) =
+            loopback_fetch(&request_url, "GET", &capability, None).await?;
+        let length: usize = response
+            .headers()
+            .get("content-length")
+            .map_err(|_| Error::InvalidResponse)?
+            .ok_or(Error::InvalidResponse)?
+            .parse()
+            .map_err(|_| Error::InvalidResponse)?;
+        if length > crate::callback::MAX_CALLBACK {
+            return Err(Error::InvalidResponse);
+        }
+        let value = JsFuture::from(
+            response
+                .array_buffer()
+                .map_err(|_| Error::InvalidResponse)?,
+        )
+        .await
         .map_err(|_| Error::InvalidResponse)?;
-    if length > crate::callback::MAX_CALLBACK {
-        return Err(Error::InvalidResponse);
+        let bytes = Uint8Array::new(&value);
+        if bytes.length() as usize != length {
+            return Err(Error::InvalidResponse);
+        }
+        let request =
+            serde_json::from_slice(&bytes.to_vec()).map_err(|_| Error::InvalidResponse)?;
+        let result = crate::callback::execute(context, request, Browser).await?;
+        let bytes = crate::callback::encode(result)?;
+        let body = Uint8Array::from(bytes.as_slice());
+        let _wipe = Wipe(vec![body.clone()]);
+        loopback_fetch(&finish, "POST", &capability, Some(&body)).await?;
+        Ok(())
     }
-    let value = JsFuture::from(
-        response
-            .array_buffer()
-            .map_err(|_| Error::InvalidResponse)?,
-    )
-    .await
-    .map_err(|_| Error::InvalidResponse)?;
-    let bytes = Uint8Array::new(&value);
-    if bytes.length() as usize != length {
-        return Err(Error::InvalidResponse);
-    }
-    let request = serde_json::from_slice(&bytes.to_vec()).map_err(|_| Error::InvalidResponse)?;
-    let result = crate::callback::execute(context, request, Browser).await?;
-    let bytes = crate::callback::encode(result)?;
-    let body = Uint8Array::from(bytes.as_slice());
-    let _wipe = Wipe(vec![body.clone()]);
-    loopback_fetch(&finish, "POST", &capability, Some(&body)).await?;
-    Ok(())
 }
 
 async fn loopback_fetch(

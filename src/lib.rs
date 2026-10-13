@@ -7,6 +7,10 @@ mod callback;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod native;
 mod options;
+#[cfg(feature = "persistent-software")]
+pub mod persistent;
+#[cfg(any(target_arch = "wasm32", all(test, feature = "test-authenticator")))]
+mod popup;
 mod secret;
 #[cfg(feature = "test-authenticator")]
 pub mod software;
@@ -56,6 +60,11 @@ impl PublicCredential {
     /// Borrow only the public server response. Signature bytes are unchanged.
     pub fn as_json(&self) -> &Value {
         &self.0
+    }
+    /// Decode the exact original credential ID already bound to this ceremony.
+    /// This public routing value proves neither server acceptance nor custody.
+    pub fn credential_id(&self) -> Result<Vec<u8>, Error> {
+        options::decode(self.0.get("rawId").ok_or(Error::InvalidResponse)?)
     }
     /// Transfer the public server response to the owning server client.
     pub fn into_json(self) -> Value {

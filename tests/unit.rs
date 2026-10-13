@@ -315,3 +315,98 @@ mod upstream {
         });
     }
 }
+
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
+#[cfg_attr(not(target_arch = "wasm32"), test)]
+fn context_origin_and_relying_party_rules_are_exact() {
+    for (origin, rp) in [
+        (ORIGIN, RP),
+        ("https://a.members.example.com", RP),
+        ("http://localhost:8080", "localhost"),
+    ] {
+        assert!(Context::new(origin, rp).is_ok(), "{origin} {rp}");
+    }
+    for (origin, rp) in [
+        ("https://members.example.com/", RP),
+        ("http://members.example.com", RP),
+        ("http://localhost", ""),
+        ("ftp://members.example.com", RP),
+        ("https://evilmembers.example.com", RP),
+        (ORIGIN, "other.example.com"),
+    ] {
+        assert!(Context::new(origin, rp).is_err(), "{origin} {rp}");
+    }
+}
+
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
+#[cfg_attr(not(target_arch = "wasm32"), test)]
+fn minimal_options_and_responses_take_the_other_branches() {
+    // Registration options need a user handle.
+    let mut no_user = creation();
+    no_user["publicKey"].as_object_mut().unwrap().remove("user");
+    assert_eq!(
+        context().prepare(no_user, true).unwrap_err(),
+        Error::InvalidOptions
+    );
+    let mut no_user_id = creation();
+    no_user_id["publicKey"]["user"]
+        .as_object_mut()
+        .unwrap()
+        .remove("id");
+    assert_eq!(
+        context().prepare(no_user_id, true).unwrap_err(),
+        Error::InvalidOptions
+    );
+    // The follow-up evaluation copies a timeout and user verification only when set.
+    let mut minimal = creation();
+    {
+        let public = minimal["publicKey"].as_object_mut().unwrap();
+        public.remove("timeout");
+        public.remove("authenticatorSelection");
+    }
+    let prepared = context().prepare(minimal, true).unwrap();
+    let follow = context()
+        .followup(&prepared, &protocol_response(true))
+        .unwrap();
+    assert!(follow["publicKey"].get("timeout").is_none());
+    assert!(follow["publicKey"].get("userVerification").is_none());
+    // An undecodable user handle or client data is refused at its own step.
+    let mut bad_user = creation();
+    bad_user["publicKey"]["user"]["id"] = json!("not base64!");
+    assert_eq!(
+        context().prepare(bad_user, true).unwrap_err(),
+        Error::InvalidOptions
+    );
+    let mut garbled = protocol_response(false);
+    garbled["response"]["clientDataJSON"] = json!("not base64!");
+    assert_eq!(
+        context().bind(&garbled, &request(), false).unwrap_err(),
+        Error::InvalidOptions
+    );
+    // Authenticator data shorter than the fixed header is refused.
+    let mut short = protocol_response(false);
+    short["response"]["authenticatorData"] = json!(URL_SAFE_NO_PAD.encode([1; 36]));
+    assert_eq!(
+        context().bind(&short, &request(), false).unwrap_err(),
+        Error::CeremonyMismatch
+    );
+    // A response without clientDataJSON is not a response.
+    let mut response = protocol_response(false);
+    response["response"]
+        .as_object_mut()
+        .unwrap()
+        .remove("clientDataJSON");
+    assert_eq!(
+        context().bind(&response, &request(), false).unwrap_err(),
+        Error::InvalidResponse
+    );
+    // Without a required user verification the flag is not demanded.
+    let mut relaxed = request();
+    relaxed["publicKey"]["userVerification"] = json!("preferred");
+    let mut auth = Sha256::digest(RP.as_bytes()).to_vec();
+    auth.extend_from_slice(&[1, 0, 0, 0, 0]);
+    let mut unverified = protocol_response(false);
+    unverified["response"]["authenticatorData"] = json!(URL_SAFE_NO_PAD.encode(auth));
+    assert!(context().bind(&unverified, &relaxed, false).is_ok());
+    assert!(context().bind(&unverified, &request(), false).is_err());
+}

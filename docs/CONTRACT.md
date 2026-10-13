@@ -106,6 +106,49 @@ results. Invalid requests leave the original operation pending until its timeout
 The listener drains an accepted response before its consuming wait closes it.
 
 The trusted cmsg/Vault runtime consumes `UnlockSecret::import` in Rust. Product
-JSON/MCP/TypeScript actions may expose a launch URL and redacted status, never the
-PRF or private callback wire. Server signature verification remains Keyhole's job;
+JSON/MCP/TypeScript actions expose only redacted status. The launch URL contains a
+bearer capability in its fragment and remains inside the trusted Rust runtime,
+which invokes `BrowserCeremony::open_browser`; neither it nor the PRF or private
+callback wire enters product JSON. Server signature verification remains Keyhole's job;
 callback success is not membership, G3 authority or a completed server login.
+
+## Sealed popup handover
+
+`browser::PopupCeremony::prepare` retains one original request in the configured
+vault frame. Its `open` requires a real activation in that frame and opens the
+exact same-origin trusted page with `noopener,noreferrer`. `wait` consumes one
+result. The popup consumes its fragment synchronously before any asynchronous
+work, or accepts it from a trusted entry that has already removed it. The actual
+page, HTTPS origin, top-level context and absence of an opener are checked.
+`PopupHandoff::ready` receives the public request before the popup enables its
+own Continue; `complete` requires that separate real user activation.
+
+The frame generates a one-time X25519 key inside Wasm. The public launch pins
+both its recipient key and a fresh 256-bit nonce. The popup uses the maintained
+[HPKE implementation](https://github.com/rozbb/rust-hpke), RFC 9180 Base mode with
+X25519/HKDF-SHA256/ChaCha20Poly1305. Associated data binds the recipient, nonce,
+both exact origins, RP, requested ceremony and original options. Its private
+callback codec remains inside Rust/Wasm: raw PRF never crosses this channel.
+Only public handshake dictionaries and HPKE ciphertext enter JavaScript buffers.
+There is no public key/secret codec or new cryptographic primitive.
+
+BroadcastChannel events require the actual trusted same-origin sender, one
+selected random peer, bounded binary messages and a bounded receive queue.
+Wrong nonce, recipient, origin, request, replay or malformed ciphertext refuses.
+The frame consumes its private key before any open attempt; ACK follows valid
+decryption and the original challenge/top-level credential checks. Owned Rust
+plaintext and JavaScript channel buffers are wiped. Keys also expire directly on
+deadline/pagehide, including a prepared owner not yet awaited. Drop closes the
+channel; pending authenticator work is aborted. No opener Window is retained,
+and a blocked popup or unavailable storage partition times out without fallback.
+
+The software-authenticator vectors exercise actual sealed PRF continuity and
+binding refusals. Wasm tests use real BroadcastChannels. The original HTTPS
+acceptance fixture adds real frame/popup clicks, same-site distinct origins,
+ordinary browser PRF, opener refusal and early-close cancellation. All execution,
+full native/browser coverage and browser qualification remain pending. The
+external popup instances are not yet included in the existing three-navigation
+coverage collector. Cross-origin isolation, installed browsers and other browser
+engines require their real matrix; no thread/isolation policy is changed here.
+Successful handover means only an opaque original result, never server
+authentication, current device authority, unlocked Vault or complete login.

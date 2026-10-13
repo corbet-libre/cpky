@@ -1,0 +1,25 @@
+<!doctype html><html lang="en"><meta charset="utf-8"><meta name="referrer" content="no-referrer">
+<title>Popup owner acceptance</title><button type="button" disabled id="continue">Continue</button>
+<script>
+// Erase before any asynchronous module/configuration operation. These are only
+// the original public nonce/key; no ceremony result ever enters this script.
+const launch = location.hash;
+history.replaceState(null, '', location.pathname);
+(async () => {
+  const api = await import('./loopback_page.js'); await api.default();
+  if (opener !== null) {
+    document.body.dataset.state = api.linked_popup_refuses() ? 'opener-refused' : 'failed'; return;
+  }
+  let owner = new api.Popup(launch);
+  addEventListener('pagehide', () => { owner?.free(); owner = null; }, {once: true});
+  await owner.ready();
+  const button = document.getElementById('continue'); button.disabled = false;
+  document.body.dataset.state = 'ready';
+  button.onclick = async () => {
+    button.disabled = true;
+    const pending = owner; owner = null;
+    try { await pending.complete(); document.body.dataset.state = 'handed-over'; }
+    catch { document.body.dataset.state = 'refused'; }
+  };
+})().catch(() => { document.body.dataset.state = 'refused'; });
+</script></html>
