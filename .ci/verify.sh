@@ -22,7 +22,8 @@ base="https://github.com/wasm-bindgen/wasm-bindgen/releases/download/${version}"
 mkdir -p "$RUNNER_TEMP/wasm-runner"
 (cd "$RUNNER_TEMP/wasm-runner" && curl --fail --location --retry 3 --remote-name "$base/$archive" && curl --fail --location --retry 3 --remote-name "$base/$archive.sha256sum" && checksum=$(cut -d ' ' -f1 "$archive.sha256sum") && printf '%s  %s\n' "$checksum" "$archive" | sha256sum --check && tar -xzf "$archive" --strip-components=1)
 export PATH="$RUNNER_TEMP/wasm-runner:$PATH"
-python3 -m pip install -r .github/requirements.txt
+# Selenium comes from the pinned Nix tool set (run-cached.sh), not pip (nixpkgs python3 ships no pip).
+python3 -c 'import selenium' || { echo "selenium is not provisioned; browser tests need it" >&2; exit 2; }
 cargo clippy --locked --target wasm32-unknown-unknown --all-features --lib -- -D warnings
 # Canonical .github/scripts/browser-runner.py hardcodes Service("/usr/bin/chromedriver"), absent from the
 # nix closure (deterministic, not first-run judgment). Adapt exactly the
