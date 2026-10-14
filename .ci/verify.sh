@@ -13,6 +13,7 @@ export GITHUB_PATH="${GITHUB_PATH:-$RUNNER_TEMP/github_path}"
 touch "$GITHUB_PATH"
 python3 .github/scripts/check-first-party.py
 python3 .github/scripts/test-source-coverage.py
+bash .ci/update-our-crates.sh
 cargo fmt --all -- --check
 cargo clippy --locked --all-targets --all-features -- -D warnings
 cargo test --locked --all-features
