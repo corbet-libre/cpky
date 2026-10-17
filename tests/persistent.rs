@@ -38,7 +38,32 @@ fn seed_credential_registers_and_a_fresh_instance_signs_in_with_the_same_prf() {
     let server = Passkeys::new(store, "synthetic", RP, &[Url::parse(ORIGIN).unwrap()]).unwrap();
     let member = Uuid::from_u128(23);
 
-    let mut first = device(7);
+    // A keeper that cannot store the handle refuses the registration before any response.
+    let mut unkept = Client::new(
+        Context::new(ORIGIN, RP).unwrap(),
+        PersistentAuthenticator::new(ORIGIN, Zeroizing::new([7; 32]))
+            .unwrap()
+            .keeping_handle(|_| false),
+    );
+    let (options, _) = server.start_registration(member).unwrap();
+    assert!(matches!(
+        futures::executor::block_on(unkept.register_member(serde_json::to_value(options).unwrap())),
+        Err(cpky::Error::Unavailable)
+    ));
+
+    let kept = std::sync::Arc::new(std::sync::Mutex::new(None::<Vec<u8>>));
+    let mut first = Client::new(
+        Context::new(ORIGIN, RP).unwrap(),
+        PersistentAuthenticator::new(ORIGIN, Zeroizing::new([7; 32]))
+            .unwrap()
+            .keeping_handle({
+                let kept = kept.clone();
+                move |handle| {
+                    *kept.lock().unwrap() = Some(handle.to_vec());
+                    true
+                }
+            }),
+    );
     let (options, pending) = server.start_registration(member).unwrap();
     let (public, prf) =
         futures::executor::block_on(first.register_member(serde_json::to_value(options).unwrap()))
@@ -54,6 +79,24 @@ fn seed_credential_registers_and_a_fresh_instance_signs_in_with_the_same_prf() {
 
     // New device: only the seed and the stored (non-secret) user handle.
     let handle = first.into_authenticator().user_handle().unwrap().to_vec();
+    // The keeper held the same handle before the response left the device.
+    assert_eq!(kept.lock().unwrap().as_deref(), Some(handle.as_slice()));
+
+    // Without the stored handle the same seed's discoverable sign-in is refused: the
+    // handle must be durable from the registration on.
+    let mut forgetful = device(7);
+    let (options, pending) = server.start_discoverable_authentication().unwrap();
+    if let Ok(done) =
+        futures::executor::block_on(forgetful.sign_in(serde_json::to_value(options).unwrap()))
+    {
+        let (public, _) = done.into_parts();
+        let response = serde_json::from_value(public.into_json()).unwrap();
+        assert!(
+            server
+                .finish_discoverable_authentication(pending, &response)
+                .is_err()
+        );
+    }
     let mut fresh = Client::new(
         Context::new(ORIGIN, RP).unwrap(),
         PersistentAuthenticator::new(ORIGIN, Zeroizing::new([7; 32]))

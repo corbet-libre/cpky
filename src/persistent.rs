@@ -86,7 +86,11 @@ pub struct PersistentAuthenticator {
     seed: Zeroizing<[u8; 32]>,
     origin: url::Url,
     user_handle: Option<Bytes>,
+    keep: Option<Keep>,
 }
+
+/// Durable store for the server-chosen user handle; `false` means it was not kept.
+type Keep = std::sync::Arc<dyn Fn(&[u8]) -> bool + Send + Sync>;
 
 impl PersistentAuthenticator {
     /// `seed` must be uniformly random (for example 32 bytes from a CSPRNG stored
@@ -103,7 +107,19 @@ impl PersistentAuthenticator {
             seed,
             origin,
             user_handle: None,
+            keep: None,
         })
+    }
+
+    /// Keep the user handle the moment a registration creates the credential, before
+    /// the response leaves, as a device stores its credential at create: a process that
+    /// stops right after the server accepted the registration signs in again with the
+    /// stored handle. A keeper that answers `false` refuses the registration
+    /// ([`Error::Unavailable`]); nothing reaches the server.
+    #[must_use]
+    pub fn keeping_handle(mut self, keep: impl Fn(&[u8]) -> bool + Send + Sync + 'static) -> Self {
+        self.keep = Some(std::sync::Arc::new(keep));
+        self
     }
 
     /// The server-chosen user handle learned at registration. It is not secret and
@@ -264,6 +280,11 @@ impl Port for PersistentAuthenticator {
             credential.response.attestation_object = attestation_object.into();
             credential.response.public_key =
                 Some(public_key_der_from_cose_key(&public).map_err(|_| Error::InvalidResponse)?);
+            if let (Some(keep), Some(handle)) = (&self.keep, &user_handle)
+                && !keep(handle.as_slice())
+            {
+                return Err(Error::Unavailable);
+            }
             self.user_handle = user_handle;
             return split(credential);
         }
