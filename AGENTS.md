@@ -14,7 +14,7 @@ Write code, comments and documentation in English.
 
 ## Quality boundary
 
-- No workstation Cargo, including fmt and metadata. Public CI executes native and actual wasm tests.
+- No local Cargo, including fmt and metadata. Public CI executes native and actual wasm tests.
 - First-party Git dependencies follow branch main with one resolved revision per crate; preserve CI-generated Cargo.lock.
 - Exact source line and branch coverage targets 100%, with no unjustified exclusions or weakened thresholds.
 - Bounded serial implementation CI; expensive scale tests belong on the designated build infrastructure.
