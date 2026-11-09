@@ -91,7 +91,7 @@ def acquire_runner(artifacts):
     root = artifacts / 'wasm-runner'
     root.mkdir()
     name = f'wasm-bindgen-{version}-x86_64-unknown-linux-musl.tar.gz'
-    base = f'https://github.com/wasm-bindgen/wasm-bindgen/releases/download/{version}'
+    base = f"{os.environ.get('WASM_BINDGEN_DOWNLOAD_BASE', 'https://github.com/wasm-bindgen/wasm-bindgen/releases/download')}/{version}"
     for suffix, limit in [('', 256 * 1024 * 1024), ('.sha256sum', 4096)]:
         request = urllib.request.Request(base + '/' + name + suffix,
                                          headers={'User-Agent': 'ci-dependency-fetch/1.0'})
