@@ -16,6 +16,12 @@ fn context() -> Context {
 fn page() -> Url {
     Url::parse("https://members.example.com/passkeys/cli").unwrap()
 }
+/// The browser side of these tests: a reqwest client after the same provider
+/// selection the product's callback client makes.
+fn http() -> reqwest::ClientBuilder {
+    crate::native::ensure_tls_provider();
+    Http::builder().no_proxy()
+}
 
 #[test]
 fn real_callback_keeps_custody_local_and_rejects_replay_origin_capability_and_substitution() {
@@ -79,8 +85,7 @@ fn real_callback_keeps_custody_local_and_rejects_replay_origin_capability_and_su
             callback::destination(ceremony.launch_url().fragment().unwrap()).unwrap();
         let mut request_url = finish.clone();
         request_url.set_path("/request");
-        let http = Http::builder()
-            .no_proxy()
+        let http = http()
             .redirect(reqwest::redirect::Policy::none())
             .build()
             .unwrap();
@@ -237,7 +242,7 @@ fn cancelling_closes_the_operation_including_existing_keepalive_connections() {
         let ceremony = BrowserCeremony::start(context(), page(), CeremonyRequest {kind:CeremonyKind::Authentication,options}).await.unwrap();
         let (mut url, capability) = callback::destination(ceremony.launch_url().fragment().unwrap()).unwrap();
         url.set_path("/request");
-        let http = Http::builder().no_proxy().build().unwrap();
+        let http = http().build().unwrap();
         let response = http.get(url.clone()).header("origin",ORIGIN).header("x-cpky-capability",capability.as_str()).send().await.unwrap();
         assert_eq!(response.status(),StatusCode::OK);
         response.bytes().await.unwrap();

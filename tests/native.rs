@@ -423,3 +423,34 @@ fn original_http_callback_accepts_real_signature_once_and_keeps_prf_opaque() {
         assert!(matches!(custody, crate::VaultOutcome::Ready(_)));
     });
 }
+
+/// Guard: wherever reqwest is built with rustls (`rustls-no-provider`, unified in
+/// here through the crlt dev-dependency), `build()` panics while the process has
+/// no crypto provider. In a fresh process, where nothing has selected one yet,
+/// the product's callback client must select it itself.
+#[cfg(feature = "embedded-authenticator")]
+#[test]
+fn callback_client_selects_its_tls_provider_in_a_fresh_process() {
+    const CHILD: &str = "CPKY_TLS_PROVIDER_CHILD";
+    const NAME: &str = "callback_client_selects_its_tls_provider_in_a_fresh_process";
+    if std::env::var_os(CHILD).is_some() {
+        assert!(
+            rustls::crypto::CryptoProvider::get_default().is_none(),
+            "the child process must start without a crypto provider"
+        );
+        callback_client().unwrap();
+        return;
+    }
+    let (_, module) = module_path!().split_once("::").unwrap();
+    let output = std::process::Command::new(std::env::current_exe().unwrap())
+        .args(["--exact", &format!("{module}::{NAME}"), "--test-threads=1"])
+        .env(CHILD, "1")
+        .output()
+        .unwrap();
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        output.status.success() && stdout.contains(" 1 passed"),
+        "fresh-process run failed:\n{stdout}\n{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+}

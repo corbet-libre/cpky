@@ -34,6 +34,30 @@ fn unavailable<E>(_: E) -> Error {
     Error::Unavailable
 }
 
+/// Select the rustls crypto provider before a reqwest client is built.
+///
+/// Linked beside any TLS client of the fleet, reqwest is unified with
+/// `rustls-no-provider`, and reqwest 0.13 has no ring-backed feature: a client
+/// built while the process has no provider panics. Keep an embedding
+/// application's provider; otherwise install ring.
+#[cfg(feature = "embedded-authenticator")]
+pub(crate) fn ensure_tls_provider() {
+    if rustls::crypto::CryptoProvider::get_default().is_none() {
+        let _ = rustls::crypto::ring::default_provider().install_default();
+    }
+}
+
+/// The client for the local callback (plain HTTP to the loopback listener).
+#[cfg(feature = "embedded-authenticator")]
+fn callback_client() -> Result<reqwest::Client, Error> {
+    ensure_tls_provider();
+    reqwest::Client::builder()
+        .timeout(BODY_LIMIT)
+        .redirect(reqwest::redirect::Policy::none())
+        .build()
+        .map_err(unavailable)
+}
+
 struct Pending {
     context: Context,
     request: CeremonyRequest,
@@ -159,11 +183,7 @@ impl BrowserCeremony {
     ) -> Result<(), Error> {
         let (finish, capability) =
             callback::destination(self.launch.fragment().ok_or(Error::InvalidOptions)?)?;
-        let client = reqwest::Client::builder()
-            .timeout(BODY_LIMIT)
-            .redirect(reqwest::redirect::Policy::none())
-            .build()
-            .map_err(unavailable)?;
+        let client = callback_client()?;
         let mut request_url = finish.clone();
         request_url.set_path("/request");
         let response = client

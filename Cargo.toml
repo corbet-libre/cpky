@@ -29,7 +29,7 @@ default = []
 # Complete a native browser ceremony with a caller-supplied authenticator over the
 # real local callback. For trusted native embeddings only; never a default or
 # browser build.
-embedded-authenticator = ["dep:reqwest"]
+embedded-authenticator = ["dep:reqwest", "dep:rustls"]
 test-authenticator = ["embedded-authenticator", "dep:passkey", "dep:passkey-types", "dep:async-trait"]
 # Deterministic software credential for an operator identity whose seed is held in
 # an external secret store. Never part of a default or browser build.
@@ -62,6 +62,9 @@ tokio = { version = "1", features = ["net", "rt", "sync", "time"] }
 getrandom = "0.4"
 webbrowser = "1"
 reqwest = { version = "0.13", default-features = false, optional = true }
+# reqwest 0.13 offers no ring-backed rustls feature; the callback client selects
+# ring itself before it is built (src/native.rs `ensure_tls_provider`).
+rustls = { version = "0.23", default-features = false, features = ["ring", "std"], optional = true }
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 js-sys = "0.3"
