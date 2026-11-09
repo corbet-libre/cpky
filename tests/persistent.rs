@@ -264,4 +264,82 @@ mod vectors {
         signed[0] ^= 1;
         assert!(key.verify(&signed, &signature).is_err());
     }
+
+    /// Wire output of the passkey 0.4 code (cpky main before the passkey 0.6 move) for seed
+    /// [7;32] and the fixed options: line 1 the registration JSON as serialized, line 2 the
+    /// persisted user handle (base64url), line 3 the assertion JSON. Written once on that
+    /// code with `CPKY_WRITE_V04_FIXTURE=1`; every later code must reproduce it byte for byte
+    /// and accept the persisted handle.
+    const V04_FIXTURE: &str = concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/tests/fixtures/persistent-v04.txt"
+    );
+
+    fn wire_lines(handle: Option<Vec<u8>>) -> (String, Vec<u8>, String) {
+        let mut first = match &handle {
+            None => device(7),
+            Some(handle) => Client::new(
+                Context::new(ORIGIN, RP).unwrap(),
+                PersistentAuthenticator::new(ORIGIN, Zeroizing::new([7; 32]))
+                    .unwrap()
+                    .with_user_handle(handle.clone()),
+            ),
+        };
+        let (public, _) = futures::executor::block_on(first.register_member(creation()))
+            .unwrap()
+            .into_parts();
+        let registration = serde_json::to_string(&public.into_json()).unwrap();
+        let kept = first.into_authenticator().user_handle().unwrap().to_vec();
+        let mut fresh = Client::new(
+            Context::new(ORIGIN, RP).unwrap(),
+            PersistentAuthenticator::new(ORIGIN, Zeroizing::new([7; 32]))
+                .unwrap()
+                .with_user_handle(handle.unwrap_or_else(|| kept.clone())),
+        );
+        let (public, _) = futures::executor::block_on(fresh.sign_in(request()))
+            .unwrap()
+            .into_parts();
+        let assertion = serde_json::to_string(&public.into_json()).unwrap();
+        (registration, kept, assertion)
+    }
+
+    #[test]
+    fn passkey_v04_wire_fixture_reproduces_and_its_handle_reads_back() {
+        if std::env::var_os("CPKY_WRITE_V04_FIXTURE").is_some() {
+            let (registration, handle, assertion) = wire_lines(None);
+            std::fs::write(
+                V04_FIXTURE,
+                format!("{registration}\n{}\n{assertion}\n", B64.encode(handle)),
+            )
+            .unwrap();
+        }
+        let fixture = std::fs::read_to_string(V04_FIXTURE).unwrap();
+        let lines: Vec<&str> = fixture.lines().collect();
+        assert_eq!(lines.len(), 3);
+        // A fresh device re-derives the identical registration and assertion bytes.
+        let (registration, handle, assertion) = wire_lines(None);
+        assert_eq!(registration, lines[0]);
+        assert_eq!(B64.encode(&handle), lines[1]);
+        assert_eq!(assertion, lines[2]);
+        // The handle persisted by the old code restores a device that signs in identically.
+        let stored = B64.decode(lines[1]).unwrap();
+        let (_, kept, restored) = wire_lines(Some(stored.clone()));
+        assert_eq!(kept, stored);
+        assert_eq!(restored, lines[2]);
+        // The assertion verifies under the public key the old registration published.
+        let registered: serde_json::Value = serde_json::from_str(lines[0]).unwrap();
+        let spki = B64
+            .decode(registered["response"]["publicKey"].as_str().unwrap())
+            .unwrap();
+        let key = VerifyingKey::from_sec1_bytes(&spki[26..]).unwrap();
+        let asserted: serde_json::Value = serde_json::from_str(&restored).unwrap();
+        let field = |name: &str| {
+            B64.decode(asserted["response"][name].as_str().unwrap())
+                .unwrap()
+        };
+        let mut signed = field("authenticatorData");
+        signed.extend_from_slice(&Sha256::digest(field("clientDataJSON")));
+        let signature = Signature::from_der(&field("signature")).unwrap();
+        assert!(key.verify(&signed, &signature).is_ok());
+    }
 }
