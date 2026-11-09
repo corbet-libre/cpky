@@ -175,9 +175,7 @@ impl PersistentAuthenticator {
 
 fn cose_pair(key: &SecretKey) -> (coset::CoseKey, coset::CoseKey) {
     use coset::{CoseKeyBuilder, iana};
-    let point = SigningKey::from(key)
-        .verifying_key()
-        .to_encoded_point(false);
+    let point = SigningKey::from(key).verifying_key().to_sec1_point(false);
     // An uncompressed point always carries both coordinates.
     let x = point.x().map(|v| v.to_vec()).unwrap_or_default();
     let y = point.y().map(|v| v.to_vec()).unwrap_or_default();
