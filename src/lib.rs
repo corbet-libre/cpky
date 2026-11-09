@@ -14,6 +14,8 @@ mod popup;
 mod secret;
 #[cfg(feature = "test-authenticator")]
 pub mod software;
+#[cfg(any(feature = "persistent-software", feature = "test-authenticator"))]
+mod webauthn_json;
 
 pub use callback::{CeremonyKind, CeremonyRequest, CeremonyResult};
 pub use options::{Context, prf_input};

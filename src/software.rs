@@ -1,8 +1,11 @@
 //! Explicit test-only upstream software authenticator. Never a production default.
 use crate::{Authenticator as Port, Error, PlatformResult, UnlockSecret, sealed};
 use passkey::{
-    authenticator::{Authenticator, UserCheck, UserValidationMethod, extensions::HmacSecretConfig},
+    authenticator::{
+        Authenticator, UiHint, UserCheck, UserValidationMethod, extensions::HmacSecretConfig,
+    },
     client::{Client, DefaultClientData},
+    crypto::AvailableBackend,
     types::{
         Passkey,
         ctap2::{Aaguid, Ctap2Error},
@@ -31,7 +34,7 @@ impl UserValidationMethod for User {
     type PasskeyItem = Passkey;
     async fn check_user<'a>(
         &self,
-        _: Option<&'a Passkey>,
+        _: UiHint<'a, Passkey>,
         _: bool,
         _: bool,
     ) -> Result<UserCheck, Ctap2Error> {
@@ -81,6 +84,7 @@ impl Port for SoftwareAuthenticator {
             Aaguid::new_empty(),
             self.credential.take(),
             User(self.config.user_verified),
+            AvailableBackend,
         );
         if self.config.prf {
             let config = HmacSecretConfig::new_with_uv_only();
@@ -121,7 +125,7 @@ fn split<R: AuthenticatorResponse + serde::Serialize>(
 ) -> Result<PlatformResult, Error> {
     // Take and wipe secret extensions BEFORE any serde or Debug operation.
     let (enabled, prf) = extract(credential.client_extension_results.prf.take());
-    let public = serde_json::to_value(credential).map_err(|_| Error::InvalidResponse)?;
+    let public = crate::webauthn_json::to_json(&credential)?;
     Ok(PlatformResult {
         public,
         enabled,

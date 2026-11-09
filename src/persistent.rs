@@ -21,10 +21,10 @@
 use crate::{Authenticator as Port, Error, PlatformResult, UnlockSecret, sealed};
 use hkdf::Hkdf;
 use p256::{SecretKey, ecdsa::SigningKey};
+use passkey::crypto::{AvailableBackend as Backend, CryptoBackend, PublicKeyT, SecretKeyT};
 use passkey::{
     authenticator::{
-        Authenticator, UserCheck, UserValidationMethod, extensions::HmacSecretConfig,
-        public_key_der_from_cose_key,
+        Authenticator, UiHint, UserCheck, UserValidationMethod, extensions::HmacSecretConfig,
     },
     client::{Client, DefaultClientData},
     types::{
@@ -48,7 +48,7 @@ impl UserValidationMethod for User {
     type PasskeyItem = Passkey;
     async fn check_user<'a>(
         &self,
-        _: Option<&'a Passkey>,
+        _: UiHint<'a, Passkey>,
         _: bool,
         _: bool,
     ) -> Result<UserCheck, Ctap2Error> {
@@ -206,6 +206,9 @@ fn passkey(
             credential_id: material.credential_id.clone().into(),
             rp_id: rp_id.to_owned(),
             user_handle,
+            // Not stored: the seed carries no account names.
+            username: None,
+            user_display_name: None,
             // Counter 0 always: nothing is stored between ceremonies.
             counter: None,
             extensions: CredentialExtensions {
@@ -228,8 +231,8 @@ impl Port for PersistentAuthenticator {
         if create {
             // Upstream registration with an empty store. PRF evaluation at create is
             // not enabled: the upstream's random secrets would not match ours.
-            let auth =
-                Authenticator::new(Aaguid::new_empty(), None::<Passkey>, User).hmac_secret(config);
+            let auth = Authenticator::new(Aaguid::new_empty(), None::<Passkey>, User, Backend)
+                .hmac_secret(config);
             let mut client = Client::new(auth);
             let options =
                 serde_json::from_value(options.clone()).map_err(|_| Error::InvalidOptions)?;
@@ -277,7 +280,13 @@ impl Port for PersistentAuthenticator {
             credential.response.authenticator_data = auth_data.into();
             credential.response.attestation_object = attestation_object.into();
             credential.response.public_key =
-                Some(public_key_der_from_cose_key(&public).map_err(|_| Error::InvalidResponse)?);
+                Some(
+                <<Backend as CryptoBackend>::SecretKey as SecretKeyT>::PublicKey::der_from_cose_key(
+                    &public,
+                )
+                .map_err(|_| Error::InvalidResponse)?
+                .into(),
+            );
             if let (Some(keep), Some(handle)) = (&self.keep, &user_handle)
                 && !keep(handle.as_slice())
             {
@@ -288,7 +297,8 @@ impl Port for PersistentAuthenticator {
         }
         // Assertion: the maintained authenticator signs with the derived credential.
         let (stored, _) = passkey(&material, &rp_id, self.user_handle.clone());
-        let auth = Authenticator::new(Aaguid::new_empty(), Some(stored), User).hmac_secret(config);
+        let auth = Authenticator::new(Aaguid::new_empty(), Some(stored), User, Backend)
+            .hmac_secret(config);
         let mut client = Client::new(auth);
         let options = serde_json::from_value(options.clone()).map_err(|_| Error::InvalidOptions)?;
         let credential = client
@@ -304,7 +314,7 @@ fn split<R: AuthenticatorResponse + serde::Serialize>(
 ) -> Result<PlatformResult, Error> {
     // Take and wipe secret extensions BEFORE any serde or Debug operation.
     let (enabled, prf) = extract(credential.client_extension_results.prf.take());
-    let public = serde_json::to_value(credential).map_err(|_| Error::InvalidResponse)?;
+    let public = crate::webauthn_json::to_json(&credential)?;
     Ok(PlatformResult {
         public,
         enabled,
