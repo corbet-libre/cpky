@@ -7,7 +7,7 @@ Rust (`#![forbid(unsafe_code)]`, `src/lib.rs:2`).
 
 - `fmt -p cpky -- --check`
 - `test -p cpky --all-features`
-  (lib 35 + persistent 2 + server 1 + doc 4, exit 0;
+  (lib 38 + it 6 + doc 4, exit 0;
   `--locked` needs CI's resolve refresh)
 - `clippy -p cpky --all-features --all-targets -- -D warnings`
 - `clippy -p cpky --target wasm32-unknown-unknown --all-features --lib -- -D warnings`
@@ -31,7 +31,7 @@ Rust (`#![forbid(unsafe_code)]`, `src/lib.rs:2`).
   (`docs/CONTRACT.md:9`):
   `loopback_tests::member_registration_round_trips_and_every_frame_substitution_is_refused`,
   `popup::tests::original_bound_decoder_rejects_another_real_challenge_even_when_sealed`,
-  `tests/server.rs::real_server_accepts_stripped_registration_discovery_and_refuses_revoked_signature`.
+  `tests/it/server.rs::real_server_accepts_stripped_registration_discovery_and_refuses_revoked_signature`.
 - Software test authenticator is explicit and feature-gated, never the production
   default (`docs/CONTRACT.md:11,45-48`): `test-authenticator` feature,
   `software::tests::*`, `native::BrowserCeremony` as the production CLI route.

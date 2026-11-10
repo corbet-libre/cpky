@@ -9,13 +9,14 @@ repository = "https://git.corbet.ch/corbet-libre/cpky.git"
 publish = false
 autotests = false
 
+# Integration tests: ONE binary (tests/it/main.rs). The former `tests/server.rs` and
+# `tests/persistent.rs` are modules of it (git mv, inner `#![cfg(..)]` gates unchanged).
+# Nothing stays separate: both suites are native, share no process-global state (each test
+# builds its own Tokio runtime and disposable Keyhole database), and no CI job, land list or
+# test tier names either target (CI runs them together in one `cargo test --locked --all-features`).
 [[test]]
-name = "server"
-path = "tests/server.rs"
-
-[[test]]
-name = "persistent"
-path = "tests/persistent.rs"
+name = "it"
+path = "tests/it/main.rs"
 
 [[example]]
 name = "loopback_page"
